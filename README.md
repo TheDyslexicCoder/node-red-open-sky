@@ -54,9 +54,11 @@ You’ll also need outbound internet access to:
   * Worldmap and Radar Center marker
 
 * **`screenshots/nodered-flow-overview.png`**
+  ![Node-Red OpenSky Flow Overview](screenshots/opensky-nodered-flow-overview.png)
   Screenshot of the Node-RED flow in the editor.
 
 * **`screenshots/worldmap-live-miami-air-traffic.png`**
+  ![Live Aircraft Radar – Miami Example](screenshots/worldmap-live-miami-air-traffic.png)
   Screenshot of the worldmap showing live planes around Miami.
 
 * **`LICENSE`**
