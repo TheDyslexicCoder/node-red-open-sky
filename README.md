@@ -268,8 +268,14 @@ For most users, this advanced feature can be ignored. The 3 default values at th
 
 ## 10. Screenshots
 
-### Live Aircraft Radar – Miami Example
+  ### Node-RED & Open SKy flow in the editor
+  ![Node-Red OpenSky Flow Overview](screenshots/opensky-nodered-flow-overview.png)
+  Screenshot of the Node-RED flow in the editor.
 
+  ### Live Aircraft Radar – Miami Example
+  ![Live Aircraft Radar – Miami Example](screenshots/worldmap-live-miami-air-traffic.png)
+  Screenshot of the worldmap showing live planes around Miami.
+  
 ---
 
 ## 11. License
