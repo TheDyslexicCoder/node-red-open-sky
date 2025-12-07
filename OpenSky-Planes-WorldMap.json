@@ -1,0 +1,185 @@
+[
+    {
+        "id": "79536b1f3c9bef45",
+        "type": "tab",
+        "label": "OpenSky Nearby Planes Radar",
+        "disabled": false,
+        "info": ""
+    },
+    {
+        "id": "6da2dc22d53c3f29",
+        "type": "inject",
+        "z": "79536b1f3c9bef45",
+        "name": "Poll OpenSky every 30s",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "30",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 130,
+        "y": 120,
+        "wires": [
+            [
+                "f11a5f6d0e8f2c33"
+            ]
+        ]
+    },
+    {
+        "id": "f11a5f6d0e8f2c33",
+        "type": "function",
+        "z": "79536b1f3c9bef45",
+        "name": "Set center, radius & URL",
+        "func": "// ============================================\n// OpenSky Nearby Planes Radar - Location Config\n// ============================================\n//\n// QUICK START (for most users):\n//  1. Only edit the three DEFAULT values below:\n//       - defaultCenterLat  → your latitude\n//       - defaultCenterLon  → your longitude\n//       - defaultRadiusKm   → your search radius (km)\n//  2. Click Done → Deploy.\n//  3. Open the worldmap and enjoy.\n//\n// ADVANCED (optional):\n//  - You can override these values from:\n//      • global.openskyRadarConfig\n//      • flow.openskyRadarConfig\n//      • msg.config { centerLat, centerLon, radiusKm }\n//      • msg.centerLat / msg.centerLon / msg.radiusKm\n//  - The logic below takes care of merging those.\n//\n// You do NOT need to touch anything below the DEFAULT block\n// unless you know exactly what you're doing.\n// ============================================\n\n\n// ===== DEFAULT DEMO CONFIG (edit these for your city) =====\n// These are used if no overrides are provided.\nconst defaultCenterLat = 25.7617;   // Miami latitude (change to your latitude)\nconst defaultCenterLon = -80.1918;  // Miami longitude (change to your longitude)\nconst defaultRadiusKm = 200;       // Search radius in km (change if needed)\n// ==========================================================\n\n\n// 1) Start with defaults\nlet centerLat = defaultCenterLat;\nlet centerLon = defaultCenterLon;\nlet radiusKm = defaultRadiusKm;\n\n\n// 2) Allow overrides from global / flow context (ADVANCED, OPTIONAL)\n//    Example (in a Change node):\n//      set flow.openskyRadarConfig to\n//      {\"centerLat\": 40.7128, \"centerLon\": -74.0060, \"radiusKm\": 250}\nconst globalCfg = global.get(\"openskyRadarConfig\") || {};\nconst flowCfg = flow.get(\"openskyRadarConfig\") || {};\n\nfunction applyCfg(cfg) {\n    if (!cfg || typeof cfg !== \"object\") return;\n    if (cfg.centerLat !== undefined && !isNaN(cfg.centerLat)) {\n        centerLat = Number(cfg.centerLat);\n    }\n    if (cfg.centerLon !== undefined && !isNaN(cfg.centerLon)) {\n        centerLon = Number(cfg.centerLon);\n    }\n    if (cfg.radiusKm !== undefined && !isNaN(cfg.radiusKm)) {\n        radiusKm = Number(cfg.radiusKm);\n    }\n}\n\n// Apply in order: global → flow\napplyCfg(globalCfg);\napplyCfg(flowCfg);\n\n\n// 3) Allow per-message override (ADVANCED, OPTIONAL)\n//    You can send msg.config or direct msg.centerLat/Lon/radiusKm\nif (msg.config && typeof msg.config === \"object\") {\n    applyCfg(msg.config);\n}\nif (msg.centerLat !== undefined && !isNaN(msg.centerLat)) {\n    centerLat = Number(msg.centerLat);\n}\nif (msg.centerLon !== undefined && !isNaN(msg.centerLon)) {\n    centerLon = Number(msg.centerLon);\n}\nif (msg.radiusKm !== undefined && !isNaN(msg.radiusKm)) {\n    radiusKm = Number(msg.radiusKm);\n}\n\n\n// 4) Save final config to flow so other nodes can read it (e.g. home marker)\nflow.set(\"openskyRadarConfig\", { centerLat, centerLon, radiusKm });\n\n// Expose center / radius on the message for downstream nodes\nmsg.centerLat = centerLat;\nmsg.centerLon = centerLon;\nmsg.radiusKm = radiusKm;\n\n\n// --- Compute bounding box from center + radius ---\n// Roughly 111 km per degree of latitude\nconst dLat = radiusKm / 111;\n\n// Longitude degrees per km depends on latitude\nconst dLon = radiusKm / (111 * Math.cos(centerLat * Math.PI / 180));\n\n// Bounding box edges\nmsg.lamin = centerLat - dLat;\nmsg.lamax = centerLat + dLat;\nmsg.lomin = centerLon - dLon;\nmsg.lomax = centerLon + dLon;\n\n\n// Build the OpenSky URL with bounding box and extended data\nmsg.url =\n    \"https://opensky-network.org/api/states/all\" +\n    \"?lamin=\" + msg.lamin +\n    \"&lamax=\" + msg.lamax +\n    \"&lomin=\" + msg.lomin +\n    \"&lomax=\" + msg.lomax +\n    \"&extended=1\";\n\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 430,
+        "y": 120,
+        "wires": [
+            [
+                "b2e35e98c3c86b21"
+            ]
+        ]
+    },
+    {
+        "id": "b2e35e98c3c86b21",
+        "type": "http request",
+        "z": "79536b1f3c9bef45",
+        "name": "Call OpenSky API",
+        "method": "GET",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "authType": "",
+        "senderr": false,
+        "x": 710,
+        "y": 120,
+        "wires": [
+            [
+                "3c0b81a6774da40c"
+            ]
+        ]
+    },
+    {
+        "id": "3c0b81a6774da40c",
+        "type": "function",
+        "z": "79536b1f3c9bef45",
+        "name": "States → worldmap markers",
+        "func": "// Transform OpenSky state vectors into Node-RED worldmap markers.\n\n// --- Airline name + brand-ish color from callsign prefix ---\nfunction getAirlineInfo(callsignRaw) {\n    const callsign = (callsignRaw || \"\").trim().toUpperCase();\n\n    // Extract prefix = letters before the first digit (e.g., JBU123 → JBU)\n    const m = callsign.match(/^[A-Z]+/);\n    const prefix = m ? m[0].slice(0, 3) : callsign.slice(0, 3);\n\n    // ✅ CONFIG: Add / edit airlines here\n    const airlineConfig = {\n        // US Majors\n        DAL: { name: \"Delta Air Lines\", color: \"#003A70\" },\n        AAL: { name: \"American Airlines\", color: \"#B7312C\" },\n        UAL: { name: \"United Airlines\", color: \"#005DAA\" },\n        SWA: { name: \"Southwest Airlines\", color: \"#304CB2\" },\n\n        // US LCCs + Regionals\n        JBU: { name: \"JetBlue Airways\", color: \"#003876\" },\n        NKS: { name: \"Spirit Airlines\", color: \"#FFEC00\" },\n        FFT: { name: \"Frontier Airlines\", color: \"#007A5E\" },\n\n        // Latin America / Caribbean / Intl\n        CMP: { name: \"Copa Airlines\", color: \"#003366\" },\n        AVA: { name: \"Avianca\", color: \"#D7141A\" },\n        TAM: { name: \"LATAM Airlines\", color: \"#462066\" },\n        LAT: { name: \"LATAM Airlines\", color: \"#462066\" },\n\n        // Europe / ME etc.\n        BAW: { name: \"British Airways\", color: \"#075AAA\" },\n        UAE: { name: \"Emirates\", color: \"#006272\" },\n        AFR: { name: \"Air France\", color: \"#002157\" },\n        DLH: { name: \"Lufthansa\", color: \"#FFCE00\" },\n        KLM: { name: \"KLM Royal Dutch Airlines\", color: \"#00A1DE\" },\n        RYR: { name: \"Ryanair\", color: \"#073590\" },\n\n        // Canada / Asia\n        ACA: { name: \"Air Canada\", color: \"#F01428\" },\n        JAL: { name: \"Japan Airlines\", color: \"#BC002D\" },\n        ANA: { name: \"All Nippon Airways\", color: \"#13448F\" },\n\n        // Bizjets / charter examples\n        VJA: { name: \"Vista America\", color: \"#A0002A\" },\n        VJS: { name: \"VistaJet\", color: \"#A0002A\" }\n    };\n\n    function colorFromPrefix(pfx) {\n        if (!pfx) return \"#888888\";\n        let hash = 0;\n        for (let i = 0; i < pfx.length; i++) {\n            hash = ((hash << 5) - hash) + pfx.charCodeAt(i);\n            hash |= 0;\n        }\n        const hue = Math.abs(hash) % 360;\n        return \"hsl(\" + hue + \",70%,50%)\";\n    }\n\n    const cfg = airlineConfig[prefix] || null;\n    const airlineName = cfg ? cfg.name : \"\"; // \"\" instead of \"Unknown airline\"\n    const color = cfg ? cfg.color : colorFromPrefix(prefix);\n\n    return {\n        callsign,\n        airlineName,\n        color,\n        prefix\n    };\n}\n\n// --- Distance (km) + bearing from center to plane ---\nfunction getDistanceAndBearing(lat1, lon1, lat2, lon2) {\n    function toRad(d) { return d * Math.PI / 180; }\n    const R = 6371; // km\n\n    const dLat = toRad(lat2 - lat1);\n    const dLon = toRad(lon2 - lon1);\n    const phi1 = toRad(lat1);\n    const phi2 = toRad(lat2);\n\n    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +\n        Math.cos(phi1) * Math.cos(phi2) *\n        Math.sin(dLon / 2) * Math.sin(dLon / 2);\n\n    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));\n    const d = R * c;\n\n    let y = Math.sin(dLon) * Math.cos(phi2);\n    let x = Math.cos(phi1) * Math.sin(phi2) -\n        Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLon);\n    let brng = Math.atan2(y, x);\n    brng = (brng * 180 / Math.PI + 360) % 360;\n\n    function bearingToCompass(b) {\n        const dirs = [\"N\", \"NE\", \"E\", \"SE\", \"S\", \"SW\", \"W\", \"NW\"];\n        const ix = Math.round(b / 45) % 8;\n        return dirs[ix];\n    }\n\n    return {\n        distanceKm: d,\n        bearingDeg: brng,\n        bearingCompass: bearingToCompass(brng)\n    };\n}\n\n// --- Optional aircraft metadata (for A320/787/etc.) ---\nconst aircraftDb = global.get(\"aircraftDb\") || {};\n\nfunction classifyAircraft(meta) {\n    if (!meta) return \"airplane\";\n    const model = (meta.model || \"\").toLowerCase();\n    const cat = (meta.category_description || \"\").toLowerCase();\n    if (cat.includes(\"helicopter\") || model.includes(\"helicopter\")) return \"helicopter\";\n    if (model.includes(\"glider\")) return \"glider\";\n    if (model.includes(\"balloon\")) return \"balloon\";\n    return \"airplane\";\n}\n\n// --- Main transform ---\n\nconst centerLat = msg.centerLat || 25.7617;\nconst centerLon = msg.centerLon || -80.1918;\n\nconst payload = msg.payload || {};\nconst states = payload.states || [];\n\nconst markers = [];\nconst now = Date.now();\n\nstates.forEach(function (row) {\n    if (!Array.isArray(row) || row.length < 7) return;\n\n    const icao24 = row[0];\n    const callsign = row[1];\n    const originCountry = row[2];\n    const timePosition = row[3];\n    const lastContact = row[4];\n    const lon = row[5];\n    const lat = row[6];\n    const baroAltitude = row[7];\n    const onGround = row[8];\n    const velocity = row[9];\n    const trueTrack = row[10];\n    const geoAltitude = row[13];\n    const category = row[17];\n\n    if (lat == null || lon == null) return;\n\n    const acMeta = aircraftDb[icao24] || {};\n    const acType = acMeta.typecode || \"\";\n    const acModel = acMeta.model || \"\";\n    const acLabel = acModel || acType || \"Unknown\";\n    const acClass = classifyAircraft(acMeta);\n\n    const airlineInfo = getAirlineInfo(callsign);\n    const distanceInfo = getDistanceAndBearing(centerLat, centerLon, lat, lon);\n\n    const altMeters = (geoAltitude != null) ? geoAltitude : baroAltitude;\n    const altFeet = altMeters != null ? Math.round(altMeters * 3.28084) : null;\n\n    const speedMs = velocity || 0;\n    const speedKts = speedMs * 1.94384;\n\n    const ageMs = lastContact ? now - (lastContact * 1000) : null;\n    const ageSec = ageMs != null ? Math.round(ageMs / 1000) : null;\n\n    const lastContactStr = lastContact\n        ? new Date(lastContact * 1000).toISOString()\n        : \"n/a\";\n\n    const displayFlight = airlineInfo.callsign || icao24 || \"Unknown flight\";\n\n    let popup = \"<strong>Flight:</strong> \" + displayFlight;\n    if (airlineInfo.airlineName) {\n        popup += \" (\" + airlineInfo.airlineName + \")\";\n    }\n    popup += \"<br>\";\n    popup += \"<strong>ICAO24:</strong> \" + icao24 + \"<br>\";\n    popup += \"<strong>Country:</strong> \" + (originCountry || \"n/a\") + \"<br>\";\n    popup += \"<strong>Last contact:</strong> \" + lastContactStr;\n    if (ageSec != null) {\n        popup += \" (\" + ageSec + \"s ago)\";\n    }\n    popup += \"<br>\";\n\n    if (acLabel !== \"Unknown\") {\n        popup += \"<strong>Aircraft:</strong> \" + acLabel + \"<br>\";\n    }\n    if (altFeet != null) {\n        popup += \"<strong>Altitude:</strong> \" + altFeet + \" ft<br>\";\n    }\n    if (speedKts) {\n        popup += \"<strong>Speed:</strong> \" + speedKts.toFixed(0) + \" kn<br>\";\n    }\n    if (distanceInfo) {\n        popup += \"<strong>From you:</strong> \" +\n            distanceInfo.distanceKm.toFixed(1) + \" km \" +\n            distanceInfo.bearingCompass + \" (\" +\n            distanceInfo.bearingDeg.toFixed(0) + \"°)<br>\";\n    }\n    if (category !== undefined && category !== null) {\n        popup += \"<strong>Category:</strong> \" + category + \"<br>\";\n    }\n    if (onGround) {\n        popup += \"<em>On ground</em>\";\n    }\n\n    const marker = {\n        name: displayFlight,\n        _id: icao24,\n        lat: lat,\n        lon: lon,\n        layer: (acClass === \"helicopter\") ? \"Helicopters\" : \"Planes\",\n        icon: (acClass === \"helicopter\") ? \"helicopter\" : \"plane\",\n        iconColor: airlineInfo.color,\n        popup: popup,\n        bearing: trueTrack || 0,\n        speed: Math.round(speedKts),\n        altitude: altFeet,\n        icao24: icao24,\n        callsign: callsign,\n        airline: airlineInfo.airlineName,\n        aircraft: acLabel\n    };\n\n    markers.push(marker);\n});\n\nmsg.payload = markers;\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1010,
+        "y": 120,
+        "wires": [
+            [
+                "8b2f9f5e1f0a2940"
+            ]
+        ]
+    },
+    {
+        "id": "8b2f9f5e1f0a2940",
+        "type": "worldmap",
+        "z": "79536b1f3c9bef45",
+        "name": "Nearby planes map",
+        "lat": "25.7617",
+        "lon": "-80.1918",
+        "zoom": "7",
+        "layer": "EsriT",
+        "cluster": "",
+        "maxage": "0",
+        "usermenu": "show",
+        "layers": "show",
+        "panit": "false",
+        "hiderightclick": "false",
+        "coords": "none",
+        "showruler": "true",
+        "path": "worldmapplanes",
+        "overlist": "DR,CO,RA,DN,HM",
+        "maplist": "OSMG,OSMC,OSMH,EsriC,EsriS,EsriT,EsriO,EsriDG,NatGeo,UKOS,OpTop",
+        "mapname": "",
+        "mapurl": "",
+        "mapopt": "",
+        "mapwms": false,
+        "x": 1250,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "7c2b649ba9028533",
+        "type": "function",
+        "z": "79536b1f3c9bef45",
+        "name": "Send home marker",
+        "func": "// Home / Radar Center marker for worldmap\n// Reads the current radar config from flow.openskyRadarConfig\n// so you only have to set your location in ONE place.\n\n// Fallback to Miami if config is missing (first run)\nconst cfg = flow.get(\"openskyRadarConfig\") || {\n    centerLat: 25.7617,\n    centerLon: -80.1918\n};\n\nmsg.payload = {\n    name: \"Radar Center\",\n    lat: cfg.centerLat,\n    lon: cfg.centerLon,\n    layer: \"Reference\",\n    icon: \"home\",\n    popup: \"<strong>Radar Center</strong><br>This is the center of your search radius.\"\n};\n\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 410,
+        "y": 60,
+        "wires": [
+            [
+                "8b2f9f5e1f0a2940"
+            ]
+        ]
+    },
+    {
+        "id": "3164dd3c5ca0f708",
+        "type": "inject",
+        "z": "79536b1f3c9bef45",
+        "name": "",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 110,
+        "y": 60,
+        "wires": [
+            [
+                "7c2b649ba9028533"
+            ]
+        ]
+    },
+    {
+        "id": "c203843dbef7cbe2",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-contrib-web-worldmap": "5.5.4"
+        }
+    }
+]
