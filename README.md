@@ -53,11 +53,11 @@ You’ll also need outbound internet access to:
   * State → worldmap marker transform
   * Worldmap and Radar Center marker
 
-* **`screenshots/nodered-flow-overview.png`**
+* **`Node-RED & OpenSky flow in the editor`**
   ![Node-Red OpenSky Flow Overview](screenshots/opensky-nodered-flow-overview.png)
   Screenshot of the Node-RED flow in the editor.
 
-* **`screenshots/worldmap-live-miami-air-traffic.png`**
+* **`Live Aircraft Radar – Miami Example`**
   ![Live Aircraft Radar – Miami Example](screenshots/worldmap-live-miami-air-traffic.png)
   Screenshot of the worldmap showing live planes around Miami.
 
@@ -131,7 +131,7 @@ This is the **only part a normal user needs to edit**.
 
 2. Find the worldmap node named:
 
-   * `Neaerby planes map`
+   * `Nearby planes map`
 
    It’s configured to serve at the path:
    `/worldmapplanes`
@@ -192,7 +192,7 @@ An Inject node fires once after deploy to send this marker to the worldmap.
 
 ## 8. Airline Colors & Names
 
-Inside the `Set center, radius & URL` function node, there is a configuration section that maps callsign prefixes (ICAO operator codes) to airline names and colors.
+Inside the `States → worldmap markers` function node, there is a configuration section that maps callsign prefixes (ICAO operator codes) to airline names and colors.
 
 Example (simplified):
 
@@ -268,7 +268,7 @@ For most users, this advanced feature can be ignored. The 3 default values at th
 
 ## 10. Screenshots
 
-  ### Node-RED & Open SKy flow in the editor
+  ### Node-RED & OpenSky flow in the editor
   ![Node-Red OpenSky Flow Overview](screenshots/opensky-nodered-flow-overview.png)
   Screenshot of the Node-RED flow in the editor.
 
