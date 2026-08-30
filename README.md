@@ -1,285 +1,116 @@
-# Node-RED OpenSky Nearby Planes Radar 🌍✈️
+# Node-RED OpenSky Live Air Traffic Radar
 
-A plug-and-play **Node-RED** flow that uses the **OpenSky Network** public REST API to show **live airplanes around any location** on an interactive **worldmap**.
+A ready-to-import Node-RED flow that plots nearby aircraft from the OpenSky Network on an interactive world map.
 
-You choose a **center latitude / longitude / radius**, and the flow:
+![OpenSky radar showing live Miami-area aircraft](screenshots/worldmap-live-miami-air-traffic.png)
 
-* Polls the OpenSky `/api/states/all` endpoint
-* Draws nearby planes on `node-red-node-worldmap`
-* Colors planes by **airline**
-* Shows **distance & bearing** from your center
-* Shows **altitude, speed, and last contact time**
+## What it does
 
-No API key is required for this basic setup.
+- Shows live aircraft inside a configurable circular search area
+- Rotates aircraft icons to their reported direction of travel
+- Groups airborne aircraft, rotorcraft, ground traffic, and radar coverage into separate layers
+- Displays a cleaner flight card with operator, altitude, speed, distance, category, and last-contact age
+- Shows live aircraft count, refresh time, authentication mode, and remaining API credits
+- Keeps aircraft visible between updates and removes stale markers after a seven-minute grace period
+- Reports API, authentication, rate-limit, and network failures on the map and in Node-RED's Debug sidebar
+- Uses anonymous access by default, with optional OAuth credentials read from environment variables
 
----
+## Requirements
 
-## 1. Features
+- [Node-RED](https://nodered.org/)
+- [`node-red-contrib-web-worldmap`](https://flows.nodered.org/node/node-red-contrib-web-worldmap) 5.8.1 or newer
+- Outbound HTTPS access to `opensky-network.org` and, when OAuth is enabled, `auth.opensky-network.org`
 
-* ✈️ **Live aircraft** around your chosen city using OpenSky
-* 🌎 **Configurable center & radius** (edit 3 values in one function)
-* 🎨 **Airline-colored markers** based on callsign (e.g., AAL, DAL, JBU, etc.)
-* 🧭 **Distance & bearing** from your “Radar Center”
-* 📡 **Altitude (ft)** and **speed (knots)**
-* ⏱️ **Last contact age** in seconds
-* 🚁 Optional support for **helicopters/other types** if an aircraft DB is added
-* 🏠 **Radar Center home icon** so you always see where your search is centered
-* 🌐 Uses `node-red-node-worldmap` for a slick, interactive UI
+The flow export declares the required worldmap package, but you can also install it from **Menu → Manage palette → Install**.
 
----
+## Quick start
 
-## 2. Requirements
-
-Before you import the flow, make sure you have:
-
-* [Node-RED](https://nodered.org/) installed and running
-* The `node-red-node-worldmap` node:
-
-  * In Node-RED: **Menu → Manage palette → Install → search `node-red-node-worldmap`**
-
-You’ll also need outbound internet access to:
-
-* `https://opensky-network.org`
-
----
-
-## 3. Files in This Repo
-
-* **`OpenSky-Planes-WorldMap.json`**
-  The exported Node-RED flow containing:
-
-  * Polling
-  * OpenSky API call
-  * State → worldmap marker transform
-  * Worldmap and Radar Center marker
-
-* **`Node-RED & OpenSky flow in the editor`**
-  ![Node-Red OpenSky Flow Overview](screenshots/opensky-nodered-flow-overview.png)
-  Screenshot of the Node-RED flow in the editor.
-
-* **`Live Aircraft Radar – Miami Example`**
-  ![Live Aircraft Radar – Miami Example](screenshots/worldmap-live-miami-air-traffic.png)
-  Screenshot of the worldmap showing live planes around Miami.
-
-* **`LICENSE`**
-  MIT license for this project.
-
----
-
-## 4. Importing the Flow (Step by Step)
-
-1. Open your Node-RED editor in the browser:
-
-   * Usually `http://<your-node-red-host>:1880`
-
-2. Click **Menu (≡) → Import → Clipboard**
-
-3. Open `OpenSky-Planes-WorldMap.json` in a text editor,
-   **select all**, and **copy** the JSON.
-
-4. Paste the JSON into the Node-RED Import dialog and click **Import**.
-
-5. You should see a new tab (e.g. `OpenSky Nearby Planes Radar`) with:
-
-   * An Inject node (“Poll OpenSky every 30s”)
-   * A function node (“Set center, radius & URL”)
-   * HTTP request node
-   * Function node (“States → worldmap markers”)
-   * Worldmap node (“Nearby planes map”)
-   * Inject + function for the Radar Center marker
-
----
-
-## 5. Setting Your Location (Center & Radius)
-
-This is the **only part a normal user needs to edit**.
-
-1. Double-click the function node named:
-   `Set center, radius & URL`
-
-2. At the top of the code, you’ll see a block like:
+1. Download [`OpenSky-Planes-WorldMap.json`](OpenSky-Planes-WorldMap.json).
+2. In Node-RED, choose **Menu → Import → Clipboard** and import the file.
+3. Open **Prepare location, auth & request** and edit the three defaults at the top:
 
    ```js
-   // ===== DEFAULT DEMO CONFIG (edit these for your city) =====
-   const defaultCenterLat = 25.7617;   // Miami latitude (change to your latitude)
-   const defaultCenterLon = -80.1918;  // Miami longitude (change to your longitude)
-   const defaultRadiusKm  = 200;       // Search radius in km (change if needed)
-   // ==========================================================
+   const defaultCenterLat = 25.7617;
+   const defaultCenterLon = -80.1918;
+   const defaultRadiusKm = 200;
    ```
 
-3. Change these values:
+4. Deploy the flow.
+5. Open `http://<your-node-red-host>:1880/worldmapplanes`.
 
-   * `defaultCenterLat` → your city’s latitude
-   * `defaultCenterLon` → your city’s longitude
-   * `defaultRadiusKm` → how far out (in km) you want to search for planes
+The map automatically fits the selected radar area whenever a viewer connects.
 
-4. Click **Done**.
+## API access and safe credential handling
 
-> 💡 Example: For New York City, you might use:
->
-> ```js
-> const defaultCenterLat = 40.7128;
-> const defaultCenterLon = -74.0060;
-> const defaultRadiusKm  = 250;
-> ```
+### Anonymous mode — default
 
----
+No API key is required for the included setup. OpenSky currently allows anonymous requests to `/api/states/all`, subject to a smaller daily credit allowance. The flow therefore polls every **5 minutes** instead of every 30 seconds.
 
-## 6. Deploying and Viewing the Map
+At the included Miami location and 200 km radius, the bounding box is under 25 square degrees and normally costs one API credit per update. Larger areas can cost more. See OpenSky's current [REST API limits and credit rules](https://openskynetwork.github.io/opensky-api/rest.html#limitations) before increasing the radius or polling frequency.
 
-1. Click the red **Deploy** button in the top-right of Node-RED.
+### Optional OAuth mode
 
-2. Find the worldmap node named:
+For a larger allowance, create an API client in your OpenSky account and provide both credentials to the Node-RED process as operating-system, service, or Docker environment variables:
 
-   * `Nearby planes map`
-
-   It’s configured to serve at the path:
-   `/worldmapplanes`
-
-3. Open this URL in your browser:
-
-   ```text
-   http://<your-node-red-host>:1880/worldmapplanes
-   ```
-
-4. Within a few seconds, you should see:
-
-   * A **map** centered roughly near your chosen region
-   * A **home icon** labeled “Radar Center”
-   * Colored plane icons around your area (depending on current traffic)
-
-5. Click on a plane marker to see details:
-
-   * Flight / callsign
-   * Airline (if recognized)
-   * Altitude (ft)
-   * Speed (knots)
-   * Distance and bearing from your Radar Center
-   * Last contact time and age
-
----
-
-## 7. Radar Center (Home) Marker
-
-The Radar Center marker uses the same coordinates as your flow configuration.
-
-The node function reads the config that was saved by `Send home marker`:
-
-```js
-// Home / Radar Center marker for worldmap
-// Reads the current radar config from flow.openskyRadarConfig
-
-const cfg = flow.get("openskyRadarConfig") || {
-    centerLat: 25.7617,
-    centerLon: -80.1918
-};
-
-msg.payload = {
-    name: "Radar Center",
-    lat: cfg.centerLat,
-    lon: cfg.centerLon,
-    layer: "Reference",
-    icon: "home",
-    popup: "<strong>Radar Center</strong><br>This is the center of your search radius."
-};
-
-return msg;
+```text
+OPENSKY_CLIENT_ID=replace_with_your_client_id
+OPENSKY_CLIENT_SECRET=replace_with_your_client_secret
 ```
 
-An Inject node fires once after deploy to send this marker to the worldmap.
+Restart Node-RED after setting them. The flow automatically:
 
----
+1. Requests an OAuth2 client-credentials token.
+2. Caches the short-lived access token in flow context.
+3. Refreshes it shortly before expiration.
+4. Falls back to anonymous access if optional authentication fails.
 
-## 8. Airline Colors & Names
+Do **not** paste a client secret into the function node, the exported JSON, a Git commit, a Debug node, or a public screenshot. This repository contains no real credential or placeholder that could be mistaken for one.
 
-Inside the `States → worldmap markers` function node, there is a configuration section that maps callsign prefixes (ICAO operator codes) to airline names and colors.
+OpenSky no longer accepts basic username/password authentication. OAuth2 client credentials are the supported authenticated method; see the official [authentication instructions](https://openskynetwork.github.io/opensky-api/rest.html#authentication).
 
-Example (simplified):
+## Runtime overrides
 
-```js
-// ✅ CONFIG: Add / edit airlines here
-const airlineConfig = {
-  // US Majors
-  DAL: { name: "Delta Air Lines", color: "#003A70" },
-  AAL: { name: "American Airlines", color: "#B7312C" },
-  UAL: { name: "United Airlines", color: "#005DAA" },
-  SWA: { name: "Southwest Airlines", color: "#304CB2" },
-
-  // LCCs / Regionals
-  JBU: { name: "JetBlue Airways", color: "#003876" },
-  NKS: { name: "Spirit Airlines", color: "#FFEC00" },
-  FFT: { name: "Frontier Airlines", color: "#007A5E" },
-
-  // International examples
-  CMP: { name: "Copa Airlines", color: "#003366" },
-  AVA: { name: "Avianca", color: "#D7141A" },
-  LAT: { name: "LATAM Airlines", color: "#462066" },
-
-  // Bizjet / charter example
-  VJT: { name: "VistaJet", color: "#A0002A" }
-};
-```
-
-If a callsign prefix is **not** in this list:
-
-* The flow still works.
-* It generates a consistent color using a hash of the prefix.
-
-### Adding your own airline
-
-1. Find the **ICAO** operator code (3-letter code in the callsign, e.g., `EZY`).
-
-2. Add an entry inside `airlineConfig` like:
-
-   ```js
-   EZY: { name: "easyJet", color: "#FF6600" },
-   ```
-
-3. Click **Done → Deploy**.
-
----
-
-## 9. Optional: Advanced Location Control
-
-If you’re comfortable with Node-RED context, you can change the radar location without editing code by setting:
-
-* `flow.openskyRadarConfig` or
-* `global.openskyRadarConfig`
-
-to an object like:
+For automation, set either `flow.openskyRadarOverride`, `global.openskyRadarOverride`, `msg.config`, or direct message properties:
 
 ```json
 {
   "centerLat": 40.7128,
-  "centerLon": -74.0060,
-  "radiusKm": 250
+  "centerLon": -74.006,
+  "radiusKm": 150
 }
 ```
 
-The `Set center, radius & URL` function is already written to:
+Message values have the highest priority. Accepted ranges are:
 
-* Start from the defaults at the top
-* Then apply these overrides if they exist
-* Then save the final config back to `flow.openskyRadarConfig`
+- Latitude: `-90` to `90`
+- Longitude: `-180` to `180`
+- Radius: `1` to `500` km
 
-For most users, this advanced feature can be ignored. The 3 default values at the top are enough.
+The final validated values are available at `flow.openskyRadarConfig`. Keeping overrides separate from the effective config means changing the three defaults still works after redeploying.
 
----
+## Visual improvements
 
-## 10. Screenshots
+The updated flow uses a dark-gray basemap, smaller heading-aware aircraft icons, a dashed search-radius overlay, a persistent radar-center marker, hover tooltips, and a compact status legend. Speed remains in the popup but is no longer sent as a worldmap vector, which removes the long red leader lines that made the original map look crowded.
 
-  ### Node-RED & OpenSky flow in the editor
-  ![Node-Red OpenSky Flow Overview](screenshots/opensky-nodered-flow-overview.png)
-  Screenshot of the Node-RED flow in the editor.
+Aircraft returned in the bounding-box corners are filtered out when they fall outside the selected circular radius. Surface vehicles and fixed obstacles are also excluded.
 
-  ### Live Aircraft Radar – Miami Example
-  ![Live Aircraft Radar – Miami Example](screenshots/worldmap-live-miami-air-traffic.png)
-  Screenshot of the worldmap showing live planes around Miami.
-  
----
+## Troubleshooting
 
-## 11. License
+| What you see | Meaning | What to do |
+|---|---|---|
+| Map loads but has no aircraft | There may be no recent OpenSky positions in the selected circle | Increase the radius moderately and check the Debug sidebar |
+| HTTP 401 | The OAuth access token was rejected or expired | The flow clears it and requests a new token on the next poll |
+| HTTP 429 | The current API credit bucket is exhausted | Wait for the refill time shown by OpenSky; do not shorten the poll interval |
+| OAuth warning, anonymous fallback | One or both environment variables are missing or invalid | Verify both variables outside the flow and restart Node-RED |
+| Connection problem dialog | Node-RED could not reach OpenSky | Check DNS, firewall, proxy, and outbound HTTPS from the Node-RED host |
+| Map opens at the wrong place | The flow was not redeployed or another override is active | Check the effective `flow.openskyRadarConfig` value |
 
-This project is licensed under the **MIT License**.
+## Data notes
 
-See the [`LICENSE`](./LICENSE) file for details.
+OpenSky provides state vectors derived from ADS-B and related surveillance sources. Callsigns, positions, categories, and metadata can be missing or delayed. The flow does not provide airline schedules, passenger status, delays, or guaranteed aircraft identity.
+
+Review OpenSky's [API documentation and terms](https://openskynetwork.github.io/opensky-api/) before using the data beyond a personal or educational project.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
