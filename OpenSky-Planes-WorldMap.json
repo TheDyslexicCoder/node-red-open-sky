@@ -4,13 +4,33 @@
         "type": "tab",
         "label": "OpenSky Nearby Planes Radar",
         "disabled": false,
-        "info": ""
+        "info": "Live nearby aircraft with anonymous or environment-based OAuth access."
+    },
+    {
+        "id": "note-location",
+        "type": "comment",
+        "z": "79536b1f3c9bef45",
+        "name": "1. Edit location defaults in the next function",
+        "info": "Change center latitude, longitude, and radius in Prepare location, auth & request.",
+        "x": 300,
+        "y": 40,
+        "wires": []
+    },
+    {
+        "id": "note-auth",
+        "type": "comment",
+        "z": "79536b1f3c9bef45",
+        "name": "Optional: set OPENSKY_CLIENT_ID + OPENSKY_CLIENT_SECRET outside the flow",
+        "info": "Never paste credentials into this export. Use operating-system, Docker, or service environment variables.",
+        "x": 470,
+        "y": 300,
+        "wires": []
     },
     {
         "id": "6da2dc22d53c3f29",
         "type": "inject",
         "z": "79536b1f3c9bef45",
-        "name": "Poll OpenSky every 30s",
+        "name": "Poll every 5 min (anonymous-safe default)",
         "props": [
             {
                 "p": "payload"
@@ -20,14 +40,14 @@
                 "vt": "str"
             }
         ],
-        "repeat": "30",
+        "repeat": "300",
         "crontab": "",
         "once": true,
         "onceDelay": 1,
         "topic": "",
         "payload": "",
         "payloadType": "date",
-        "x": 130,
+        "x": 170,
         "y": 120,
         "wires": [
             [
@@ -39,19 +59,73 @@
         "id": "f11a5f6d0e8f2c33",
         "type": "function",
         "z": "79536b1f3c9bef45",
-        "name": "Set center, radius & URL",
-        "func": "// ============================================\n// OpenSky Nearby Planes Radar - Location Config\n// ============================================\n//\n// QUICK START (for most users):\n//  1. Only edit the three DEFAULT values below:\n//       - defaultCenterLat  → your latitude\n//       - defaultCenterLon  → your longitude\n//       - defaultRadiusKm   → your search radius (km)\n//  2. Click Done → Deploy.\n//  3. Open the worldmap and enjoy.\n//\n// ADVANCED (optional):\n//  - You can override these values from:\n//      • global.openskyRadarConfig\n//      • flow.openskyRadarConfig\n//      • msg.config { centerLat, centerLon, radiusKm }\n//      • msg.centerLat / msg.centerLon / msg.radiusKm\n//  - The logic below takes care of merging those.\n//\n// You do NOT need to touch anything below the DEFAULT block\n// unless you know exactly what you're doing.\n// ============================================\n\n\n// ===== DEFAULT DEMO CONFIG (edit these for your city) =====\n// These are used if no overrides are provided.\nconst defaultCenterLat = 25.7617;   // Miami latitude (change to your latitude)\nconst defaultCenterLon = -80.1918;  // Miami longitude (change to your longitude)\nconst defaultRadiusKm = 200;       // Search radius in km (change if needed)\n// ==========================================================\n\n\n// 1) Start with defaults\nlet centerLat = defaultCenterLat;\nlet centerLon = defaultCenterLon;\nlet radiusKm = defaultRadiusKm;\n\n\n// 2) Allow overrides from global / flow context (ADVANCED, OPTIONAL)\n//    Example (in a Change node):\n//      set flow.openskyRadarConfig to\n//      {\"centerLat\": 40.7128, \"centerLon\": -74.0060, \"radiusKm\": 250}\nconst globalCfg = global.get(\"openskyRadarConfig\") || {};\nconst flowCfg = flow.get(\"openskyRadarConfig\") || {};\n\nfunction applyCfg(cfg) {\n    if (!cfg || typeof cfg !== \"object\") return;\n    if (cfg.centerLat !== undefined && !isNaN(cfg.centerLat)) {\n        centerLat = Number(cfg.centerLat);\n    }\n    if (cfg.centerLon !== undefined && !isNaN(cfg.centerLon)) {\n        centerLon = Number(cfg.centerLon);\n    }\n    if (cfg.radiusKm !== undefined && !isNaN(cfg.radiusKm)) {\n        radiusKm = Number(cfg.radiusKm);\n    }\n}\n\n// Apply in order: global → flow\napplyCfg(globalCfg);\napplyCfg(flowCfg);\n\n\n// 3) Allow per-message override (ADVANCED, OPTIONAL)\n//    You can send msg.config or direct msg.centerLat/Lon/radiusKm\nif (msg.config && typeof msg.config === \"object\") {\n    applyCfg(msg.config);\n}\nif (msg.centerLat !== undefined && !isNaN(msg.centerLat)) {\n    centerLat = Number(msg.centerLat);\n}\nif (msg.centerLon !== undefined && !isNaN(msg.centerLon)) {\n    centerLon = Number(msg.centerLon);\n}\nif (msg.radiusKm !== undefined && !isNaN(msg.radiusKm)) {\n    radiusKm = Number(msg.radiusKm);\n}\n\n\n// 4) Save final config to flow so other nodes can read it (e.g. home marker)\nflow.set(\"openskyRadarConfig\", { centerLat, centerLon, radiusKm });\n\n// Expose center / radius on the message for downstream nodes\nmsg.centerLat = centerLat;\nmsg.centerLon = centerLon;\nmsg.radiusKm = radiusKm;\n\n\n// --- Compute bounding box from center + radius ---\n// Roughly 111 km per degree of latitude\nconst dLat = radiusKm / 111;\n\n// Longitude degrees per km depends on latitude\nconst dLon = radiusKm / (111 * Math.cos(centerLat * Math.PI / 180));\n\n// Bounding box edges\nmsg.lamin = centerLat - dLat;\nmsg.lamax = centerLat + dLat;\nmsg.lomin = centerLon - dLon;\nmsg.lomax = centerLon + dLon;\n\n\n// Build the OpenSky URL with bounding box and extended data\nmsg.url =\n    \"https://opensky-network.org/api/states/all\" +\n    \"?lamin=\" + msg.lamin +\n    \"&lamax=\" + msg.lamax +\n    \"&lomin=\" + msg.lomin +\n    \"&lomax=\" + msg.lomax +\n    \"&extended=1\";\n\nreturn msg;\n",
-        "outputs": 1,
+        "name": "Prepare location, auth & request",
+        "func": "// OpenSky request, location, and secret-safe OAuth configuration.\n// Edit only these three defaults for your location.\nconst defaultCenterLat = 25.7617;\nconst defaultCenterLon = -80.1918;\nconst defaultRadiusKm = 200;\n\nfunction finiteNumber(value, fallback) {\n    const parsed = Number(value);\n    return Number.isFinite(parsed) ? parsed : fallback;\n}\n\nlet cfg = {\n    centerLat: defaultCenterLat,\n    centerLon: defaultCenterLon,\n    radiusKm: defaultRadiusKm\n};\n\n// Optional runtime overrides. The effective config is stored separately in\n// flow.openskyRadarConfig so changing the defaults above still takes effect.\nfunction applyOverride(source) {\n    if (!source || typeof source !== \"object\") return;\n    cfg.centerLat = finiteNumber(source.centerLat, cfg.centerLat);\n    cfg.centerLon = finiteNumber(source.centerLon, cfg.centerLon);\n    cfg.radiusKm = finiteNumber(source.radiusKm, cfg.radiusKm);\n}\n\napplyOverride(global.get(\"openskyRadarOverride\"));\napplyOverride(flow.get(\"openskyRadarOverride\"));\napplyOverride(msg.config);\napplyOverride(msg);\n\nif (cfg.centerLat < -90 || cfg.centerLat > 90) {\n    node.error(\"centerLat must be between -90 and 90\", msg);\n    return null;\n}\nif (cfg.centerLon < -180 || cfg.centerLon > 180) {\n    node.error(\"centerLon must be between -180 and 180\", msg);\n    return null;\n}\nif (cfg.radiusKm < 1 || cfg.radiusKm > 500) {\n    node.error(\"radiusKm must be between 1 and 500 km\", msg);\n    return null;\n}\n\nconst dLat = cfg.radiusKm / 111;\nconst safeCos = Math.max(Math.abs(Math.cos(cfg.centerLat * Math.PI / 180)), 0.05);\nconst dLon = cfg.radiusKm / (111 * safeCos);\nconst bounds = {\n    lamin: Math.max(-90, cfg.centerLat - dLat),\n    lamax: Math.min(90, cfg.centerLat + dLat),\n    lomin: Math.max(-180, cfg.centerLon - dLon),\n    lomax: Math.min(180, cfg.centerLon + dLon)\n};\n\nconst areaSqDeg = (bounds.lamax - bounds.lamin) * (bounds.lomax - bounds.lomin);\nconst estimatedCreditCost = areaSqDeg <= 25 ? 1 : areaSqDeg <= 100 ? 2 : areaSqDeg <= 400 ? 3 : 4;\n\nconst clientId = env.get(\"OPENSKY_CLIENT_ID\");\nconst clientSecret = env.get(\"OPENSKY_CLIENT_SECRET\");\nconst authConfigured = Boolean(clientId && clientSecret);\n\ncfg = Object.assign(cfg, bounds, {\n    estimatedCreditCost,\n    authConfigured,\n    pollSeconds: 300\n});\nflow.set(\"openskyRadarConfig\", cfg);\n\nconst dataUrl = \"https://opensky-network.org/api/states/all\" +\n    \"?lamin=\" + bounds.lamin.toFixed(5) +\n    \"&lamax=\" + bounds.lamax.toFixed(5) +\n    \"&lomin=\" + bounds.lomin.toFixed(5) +\n    \"&lomax=\" + bounds.lomax.toFixed(5) +\n    \"&extended=1\";\n\nmsg.url = dataUrl;\nmsg.centerLat = cfg.centerLat;\nmsg.centerLon = cfg.centerLon;\nmsg.radiusKm = cfg.radiusKm;\nmsg.openskyConfig = cfg;\n\nconst mapKey = [cfg.centerLat, cfg.centerLon, cfg.radiusKm].join(\":\");\nlet mapMessage = null;\nif (context.get(\"lastMapKey\") !== mapKey) {\n    context.set(\"lastMapKey\", mapKey);\n    mapMessage = { openskyConfig: cfg, _mapInit: true };\n}\n\nif (!authConfigured) {\n    if ((clientId && !clientSecret) || (!clientId && clientSecret)) {\n        node.warn(\"Both OPENSKY_CLIENT_ID and OPENSKY_CLIENT_SECRET are required; using anonymous access.\");\n    }\n    msg._openskyAuthMode = \"anonymous\";\n    node.status({ fill: \"blue\", shape: \"ring\", text: \"anonymous • ~\" + estimatedCreditCost + \" credit/poll\" });\n    return [msg, null, mapMessage];\n}\n\nconst cached = flow.get(\"openskyOAuth\") || {};\nif (cached.accessToken && cached.expiresAt > Date.now() + 60000) {\n    msg.headers = { Authorization: \"Bearer \" + cached.accessToken };\n    msg._openskyAuthMode = \"authenticated\";\n    node.status({ fill: \"green\", shape: \"dot\", text: \"authenticated • ~\" + estimatedCreditCost + \" credit/poll\" });\n    return [msg, null, mapMessage];\n}\n\nconst tokenMessage = Object.assign({}, msg, {\n    url: \"https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token\",\n    headers: { \"Content-Type\": \"application/x-www-form-urlencoded\" },\n    payload: \"grant_type=client_credentials&client_id=\" + encodeURIComponent(clientId) +\n        \"&client_secret=\" + encodeURIComponent(clientSecret),\n    _openskyDataUrl: dataUrl,\n    _openskyAuthMode: \"token-request\"\n});\nnode.status({ fill: \"yellow\", shape: \"ring\", text: \"refreshing OAuth token\" });\nreturn [null, tokenMessage, mapMessage];",
+        "outputs": 3,
         "timeout": "",
         "noerr": 0,
         "initialize": "",
         "finalize": "",
         "libs": [],
-        "x": 430,
+        "x": 470,
         "y": 120,
         "wires": [
             [
                 "b2e35e98c3c86b21"
+            ],
+            [
+                "oauth-http"
+            ],
+            [
+                "map-ui-builder"
+            ]
+        ]
+    },
+    {
+        "id": "oauth-http",
+        "type": "http request",
+        "z": "79536b1f3c9bef45",
+        "name": "Get OAuth token (optional)",
+        "method": "POST",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "authType": "",
+        "senderr": false,
+        "x": 760,
+        "y": 180,
+        "wires": [
+            [
+                "oauth-handler"
+            ]
+        ]
+    },
+    {
+        "id": "oauth-handler",
+        "type": "function",
+        "z": "79536b1f3c9bef45",
+        "name": "Cache token or use anonymous",
+        "func": "// Cache the short-lived OAuth token. Secret values never leave this path.\nconst status = Number(msg.statusCode || 0);\nconst data = msg.payload && typeof msg.payload === \"object\" ? msg.payload : {};\n\nif (status >= 200 && status < 300 && data.access_token) {\n    const expiresIn = Number(data.expires_in) || 1800;\n    flow.set(\"openskyOAuth\", {\n        accessToken: data.access_token,\n        expiresAt: Date.now() + Math.max(60, expiresIn - 30) * 1000\n    });\n\n    msg.url = msg._openskyDataUrl;\n    msg.headers = { Authorization: \"Bearer \" + data.access_token };\n    msg.payload = \"\";\n    msg._openskyAuthMode = \"authenticated\";\n    delete msg.statusCode;\n    delete msg._openskyDataUrl;\n    node.status({ fill: \"green\", shape: \"dot\", text: \"OAuth token ready\" });\n    return [msg, null, null];\n}\n\n// Do not expose the token-request body in Debug. Fall back to anonymous data\n// so a bad optional credential does not break the public demo.\nflow.set(\"openskyOAuth\", null);\nconst reason = status ? \"OAuth request returned HTTP \" + status : \"OAuth token response was invalid\";\nnode.warn(reason + \"; falling back to anonymous access.\");\n\nconst fallback = {\n    url: msg._openskyDataUrl,\n    centerLat: msg.centerLat,\n    centerLon: msg.centerLon,\n    radiusKm: msg.radiusKm,\n    openskyConfig: msg.openskyConfig,\n    _openskyAuthMode: \"anonymous fallback\"\n};\nconst mapError = {\n    payload: {\n        command: {\n            showdialog: \"<b>OpenSky sign-in failed</b><br>Using anonymous access for this update. Check the two OPENSKY environment variables.\"\n        }\n    }\n};\nconst safeError = { payload: { source: \"OpenSky OAuth\", statusCode: status || null, message: reason } };\nreturn [fallback, mapError, safeError];",
+        "outputs": 3,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1030,
+        "y": 180,
+        "wires": [
+            [
+                "b2e35e98c3c86b21"
+            ],
+            [
+                "8b2f9f5e1f0a2940"
+            ],
+            [
+                "debug-errors"
             ]
         ]
     },
@@ -59,7 +133,7 @@
         "id": "b2e35e98c3c86b21",
         "type": "http request",
         "z": "79536b1f3c9bef45",
-        "name": "Call OpenSky API",
+        "name": "Call OpenSky states API",
         "method": "GET",
         "ret": "obj",
         "paytoqs": "ignore",
@@ -69,7 +143,7 @@
         "proxy": "",
         "authType": "",
         "senderr": false,
-        "x": 710,
+        "x": 760,
         "y": 120,
         "wires": [
             [
@@ -81,105 +155,165 @@
         "id": "3c0b81a6774da40c",
         "type": "function",
         "z": "79536b1f3c9bef45",
-        "name": "States → worldmap markers",
-        "func": "// Transform OpenSky state vectors into Node-RED worldmap markers.\n\n// --- Airline name + brand-ish color from callsign prefix ---\nfunction getAirlineInfo(callsignRaw) {\n    const callsign = (callsignRaw || \"\").trim().toUpperCase();\n\n    // Extract prefix = letters before the first digit (e.g., JBU123 → JBU)\n    const m = callsign.match(/^[A-Z]+/);\n    const prefix = m ? m[0].slice(0, 3) : callsign.slice(0, 3);\n\n    // ✅ CONFIG: Add / edit airlines here\n    const airlineConfig = {\n        // US Majors\n        DAL: { name: \"Delta Air Lines\", color: \"#003A70\" },\n        AAL: { name: \"American Airlines\", color: \"#B7312C\" },\n        UAL: { name: \"United Airlines\", color: \"#005DAA\" },\n        SWA: { name: \"Southwest Airlines\", color: \"#304CB2\" },\n\n        // US LCCs + Regionals\n        JBU: { name: \"JetBlue Airways\", color: \"#003876\" },\n        NKS: { name: \"Spirit Airlines\", color: \"#FFEC00\" },\n        FFT: { name: \"Frontier Airlines\", color: \"#007A5E\" },\n\n        // Latin America / Caribbean / Intl\n        CMP: { name: \"Copa Airlines\", color: \"#003366\" },\n        AVA: { name: \"Avianca\", color: \"#D7141A\" },\n        TAM: { name: \"LATAM Airlines\", color: \"#462066\" },\n        LAT: { name: \"LATAM Airlines\", color: \"#462066\" },\n\n        // Europe / ME etc.\n        BAW: { name: \"British Airways\", color: \"#075AAA\" },\n        UAE: { name: \"Emirates\", color: \"#006272\" },\n        AFR: { name: \"Air France\", color: \"#002157\" },\n        DLH: { name: \"Lufthansa\", color: \"#FFCE00\" },\n        KLM: { name: \"KLM Royal Dutch Airlines\", color: \"#00A1DE\" },\n        RYR: { name: \"Ryanair\", color: \"#073590\" },\n\n        // Canada / Asia\n        ACA: { name: \"Air Canada\", color: \"#F01428\" },\n        JAL: { name: \"Japan Airlines\", color: \"#BC002D\" },\n        ANA: { name: \"All Nippon Airways\", color: \"#13448F\" },\n\n        // Bizjets / charter examples\n        VJA: { name: \"Vista America\", color: \"#A0002A\" },\n        VJS: { name: \"VistaJet\", color: \"#A0002A\" }\n    };\n\n    function colorFromPrefix(pfx) {\n        if (!pfx) return \"#888888\";\n        let hash = 0;\n        for (let i = 0; i < pfx.length; i++) {\n            hash = ((hash << 5) - hash) + pfx.charCodeAt(i);\n            hash |= 0;\n        }\n        const hue = Math.abs(hash) % 360;\n        return \"hsl(\" + hue + \",70%,50%)\";\n    }\n\n    const cfg = airlineConfig[prefix] || null;\n    const airlineName = cfg ? cfg.name : \"\"; // \"\" instead of \"Unknown airline\"\n    const color = cfg ? cfg.color : colorFromPrefix(prefix);\n\n    return {\n        callsign,\n        airlineName,\n        color,\n        prefix\n    };\n}\n\n// --- Distance (km) + bearing from center to plane ---\nfunction getDistanceAndBearing(lat1, lon1, lat2, lon2) {\n    function toRad(d) { return d * Math.PI / 180; }\n    const R = 6371; // km\n\n    const dLat = toRad(lat2 - lat1);\n    const dLon = toRad(lon2 - lon1);\n    const phi1 = toRad(lat1);\n    const phi2 = toRad(lat2);\n\n    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +\n        Math.cos(phi1) * Math.cos(phi2) *\n        Math.sin(dLon / 2) * Math.sin(dLon / 2);\n\n    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));\n    const d = R * c;\n\n    let y = Math.sin(dLon) * Math.cos(phi2);\n    let x = Math.cos(phi1) * Math.sin(phi2) -\n        Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLon);\n    let brng = Math.atan2(y, x);\n    brng = (brng * 180 / Math.PI + 360) % 360;\n\n    function bearingToCompass(b) {\n        const dirs = [\"N\", \"NE\", \"E\", \"SE\", \"S\", \"SW\", \"W\", \"NW\"];\n        const ix = Math.round(b / 45) % 8;\n        return dirs[ix];\n    }\n\n    return {\n        distanceKm: d,\n        bearingDeg: brng,\n        bearingCompass: bearingToCompass(brng)\n    };\n}\n\n// --- Optional aircraft metadata (for A320/787/etc.) ---\nconst aircraftDb = global.get(\"aircraftDb\") || {};\n\nfunction classifyAircraft(meta) {\n    if (!meta) return \"airplane\";\n    const model = (meta.model || \"\").toLowerCase();\n    const cat = (meta.category_description || \"\").toLowerCase();\n    if (cat.includes(\"helicopter\") || model.includes(\"helicopter\")) return \"helicopter\";\n    if (model.includes(\"glider\")) return \"glider\";\n    if (model.includes(\"balloon\")) return \"balloon\";\n    return \"airplane\";\n}\n\n// --- Main transform ---\n\nconst centerLat = msg.centerLat || 25.7617;\nconst centerLon = msg.centerLon || -80.1918;\n\nconst payload = msg.payload || {};\nconst states = payload.states || [];\n\nconst markers = [];\nconst now = Date.now();\n\nstates.forEach(function (row) {\n    if (!Array.isArray(row) || row.length < 7) return;\n\n    const icao24 = row[0];\n    const callsign = row[1];\n    const originCountry = row[2];\n    const timePosition = row[3];\n    const lastContact = row[4];\n    const lon = row[5];\n    const lat = row[6];\n    const baroAltitude = row[7];\n    const onGround = row[8];\n    const velocity = row[9];\n    const trueTrack = row[10];\n    const geoAltitude = row[13];\n    const category = row[17];\n\n    if (lat == null || lon == null) return;\n\n    const acMeta = aircraftDb[icao24] || {};\n    const acType = acMeta.typecode || \"\";\n    const acModel = acMeta.model || \"\";\n    const acLabel = acModel || acType || \"Unknown\";\n    const acClass = classifyAircraft(acMeta);\n\n    const airlineInfo = getAirlineInfo(callsign);\n    const distanceInfo = getDistanceAndBearing(centerLat, centerLon, lat, lon);\n\n    const altMeters = (geoAltitude != null) ? geoAltitude : baroAltitude;\n    const altFeet = altMeters != null ? Math.round(altMeters * 3.28084) : null;\n\n    const speedMs = velocity || 0;\n    const speedKts = speedMs * 1.94384;\n\n    const ageMs = lastContact ? now - (lastContact * 1000) : null;\n    const ageSec = ageMs != null ? Math.round(ageMs / 1000) : null;\n\n    const lastContactStr = lastContact\n        ? new Date(lastContact * 1000).toISOString()\n        : \"n/a\";\n\n    const displayFlight = airlineInfo.callsign || icao24 || \"Unknown flight\";\n\n    let popup = \"<strong>Flight:</strong> \" + displayFlight;\n    if (airlineInfo.airlineName) {\n        popup += \" (\" + airlineInfo.airlineName + \")\";\n    }\n    popup += \"<br>\";\n    popup += \"<strong>ICAO24:</strong> \" + icao24 + \"<br>\";\n    popup += \"<strong>Country:</strong> \" + (originCountry || \"n/a\") + \"<br>\";\n    popup += \"<strong>Last contact:</strong> \" + lastContactStr;\n    if (ageSec != null) {\n        popup += \" (\" + ageSec + \"s ago)\";\n    }\n    popup += \"<br>\";\n\n    if (acLabel !== \"Unknown\") {\n        popup += \"<strong>Aircraft:</strong> \" + acLabel + \"<br>\";\n    }\n    if (altFeet != null) {\n        popup += \"<strong>Altitude:</strong> \" + altFeet + \" ft<br>\";\n    }\n    if (speedKts) {\n        popup += \"<strong>Speed:</strong> \" + speedKts.toFixed(0) + \" kn<br>\";\n    }\n    if (distanceInfo) {\n        popup += \"<strong>From you:</strong> \" +\n            distanceInfo.distanceKm.toFixed(1) + \" km \" +\n            distanceInfo.bearingCompass + \" (\" +\n            distanceInfo.bearingDeg.toFixed(0) + \"°)<br>\";\n    }\n    if (category !== undefined && category !== null) {\n        popup += \"<strong>Category:</strong> \" + category + \"<br>\";\n    }\n    if (onGround) {\n        popup += \"<em>On ground</em>\";\n    }\n\n    const marker = {\n        name: displayFlight,\n        _id: icao24,\n        lat: lat,\n        lon: lon,\n        layer: (acClass === \"helicopter\") ? \"Helicopters\" : \"Planes\",\n        icon: (acClass === \"helicopter\") ? \"helicopter\" : \"plane\",\n        iconColor: airlineInfo.color,\n        popup: popup,\n        bearing: trueTrack || 0,\n        speed: Math.round(speedKts),\n        altitude: altFeet,\n        icao24: icao24,\n        callsign: callsign,\n        airline: airlineInfo.airlineName,\n        aircraft: acLabel\n    };\n\n    markers.push(marker);\n});\n\nmsg.payload = markers;\nreturn msg;\n",
-        "outputs": 1,
+        "name": "Validate, filter & style aircraft",
+        "func": "// Validate the response and turn state vectors into polished map markers.\nfunction escapeHtml(value) {\n    return String(value == null ? \"\" : value)\n        .replace(/&/g, \"&amp;\")\n        .replace(/</g, \"&lt;\")\n        .replace(/>/g, \"&gt;\")\n        .replace(/\"/g, \"&quot;\")\n        .replace(/'/g, \"&#39;\");\n}\n\nfunction getHeader(headers, name) {\n    if (!headers || typeof headers !== \"object\") return \"\";\n    const wanted = name.toLowerCase();\n    const key = Object.keys(headers).find(k => k.toLowerCase() === wanted);\n    return key ? headers[key] : \"\";\n}\n\nfunction getDistanceAndBearing(lat1, lon1, lat2, lon2) {\n    const toRad = d => d * Math.PI / 180;\n    const dLat = toRad(lat2 - lat1);\n    const dLon = toRad(lon2 - lon1);\n    const phi1 = toRad(lat1);\n    const phi2 = toRad(lat2);\n    const a = Math.sin(dLat / 2) ** 2 + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLon / 2) ** 2;\n    const distanceKm = 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));\n    const y = Math.sin(dLon) * Math.cos(phi2);\n    const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLon);\n    const bearingDeg = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;\n    const directions = [\"N\", \"NE\", \"E\", \"SE\", \"S\", \"SW\", \"W\", \"NW\"];\n    return { distanceKm, bearingDeg, bearingCompass: directions[Math.round(bearingDeg / 45) % 8] };\n}\n\nconst airlineConfig = {\n    AAL: [\"American Airlines\", \"#ef4444\"],\n    ACA: [\"Air Canada\", \"#dc2626\"],\n    AFR: [\"Air France\", \"#2563eb\"],\n    ANA: [\"All Nippon Airways\", \"#2563eb\"],\n    AVA: [\"Avianca\", \"#ef4444\"],\n    BAW: [\"British Airways\", \"#2563eb\"],\n    CMP: [\"Copa Airlines\", \"#0f766e\"],\n    DAL: [\"Delta Air Lines\", \"#2563eb\"],\n    DLH: [\"Lufthansa\", \"#facc15\"],\n    FFT: [\"Frontier Airlines\", \"#16a34a\"],\n    JAL: [\"Japan Airlines\", \"#dc2626\"],\n    JBU: [\"JetBlue Airways\", \"#0284c7\"],\n    KLM: [\"KLM\", \"#0ea5e9\"],\n    LAT: [\"LATAM Airlines\", \"#7c3aed\"],\n    NKS: [\"Spirit Airlines\", \"#facc15\"],\n    ROU: [\"Air Canada Rouge\", \"#e11d48\"],\n    RYR: [\"Ryanair\", \"#1d4ed8\"],\n    SWA: [\"Southwest Airlines\", \"#3b82f6\"],\n    UAE: [\"Emirates\", \"#dc2626\"],\n    UAL: [\"United Airlines\", \"#2563eb\"],\n    VJA: [\"Vista America\", \"#be123c\"],\n    VJS: [\"VistaJet\", \"#be123c\"]\n};\n\nfunction airlineInfo(raw) {\n    const callsign = String(raw || \"\").trim().toUpperCase();\n    const match = callsign.match(/^[A-Z]{3}/);\n    const prefix = match ? match[0] : \"\";\n    if (airlineConfig[prefix]) {\n        return { callsign, name: airlineConfig[prefix][0], color: airlineConfig[prefix][1] };\n    }\n    let hash = 0;\n    for (let i = 0; i < prefix.length; i++) hash = ((hash << 5) - hash + prefix.charCodeAt(i)) | 0;\n    return { callsign, name: \"\", color: prefix ? \"hsl(\" + (Math.abs(hash) % 360) + \",72%,48%)\" : \"#64748b\" };\n}\n\nconst categoryNames = [\n    \"Unspecified\", \"No emitter category\", \"Light\", \"Small\", \"Large\", \"High-vortex large\",\n    \"Heavy\", \"High performance\", \"Rotorcraft\", \"Glider\", \"Lighter-than-air\", \"Skydiver\",\n    \"Ultralight\", \"Reserved\", \"UAV\", \"Space vehicle\", \"Emergency vehicle\", \"Service vehicle\",\n    \"Point obstacle\", \"Cluster obstacle\", \"Line obstacle\"\n];\n\nfunction classify(meta, category) {\n    const text = ((meta && meta.model) || \"\") + \" \" + ((meta && meta.category_description) || \"\");\n    if (/helicopter/i.test(text) || category === 8) return \"helicopter\";\n    if (/glider/i.test(text) || category === 9) return \"glider\";\n    if (/balloon/i.test(text) || category === 10) return \"balloon\";\n    if (category === 14) return \"uav\";\n    return \"airplane\";\n}\n\nfunction errorOutputs(title, detail, statusCode) {\n    const safeTitle = escapeHtml(title);\n    const safeDetail = escapeHtml(detail);\n    const ui = {\n        payload: {\n            command: {\n                toptitle: \"OpenSky Radar • attention needed\",\n                showdialog: \"<div style='font-family:system-ui;min-width:260px'><b>\" + safeTitle + \"</b><br>\" + safeDetail + \"</div>\"\n            }\n        }\n    };\n    const debug = { payload: { source: \"OpenSky states\", statusCode: statusCode || null, message: detail } };\n    return [null, ui, debug];\n}\n\nconst statusCode = Number(msg.statusCode || (msg.payload && Array.isArray(msg.payload.states) ? 200 : 0));\nif (statusCode < 200 || statusCode >= 300) {\n    if (statusCode === 401) {\n        flow.set(\"openskyOAuth\", null);\n        return errorOutputs(\"OpenSky authorization expired\", \"The token was cleared and will refresh on the next poll.\", statusCode);\n    }\n    if (statusCode === 429) {\n        const retry = getHeader(msg.headers, \"x-rate-limit-retry-after-seconds\");\n        return errorOutputs(\"OpenSky rate limit reached\", retry ? \"Try again in \" + retry + \" seconds.\" : \"Wait for the API credit bucket to refill.\", statusCode);\n    }\n    return errorOutputs(\"OpenSky request failed\", \"HTTP \" + (statusCode || \"unknown\") + \". Check Node-RED's Debug sidebar.\", statusCode);\n}\n\nif (!msg.payload || !Array.isArray(msg.payload.states)) {\n    return errorOutputs(\"Unexpected OpenSky response\", \"The response did not contain a states array.\", statusCode);\n}\n\nconst cfg = msg.openskyConfig || flow.get(\"openskyRadarConfig\") || {};\nconst centerLat = Number.isFinite(Number(msg.centerLat)) ? Number(msg.centerLat) : Number(cfg.centerLat);\nconst centerLon = Number.isFinite(Number(msg.centerLon)) ? Number(msg.centerLon) : Number(cfg.centerLon);\nconst radiusKm = Number.isFinite(Number(msg.radiusKm)) ? Number(msg.radiusKm) : Number(cfg.radiusKm || 200);\nconst aircraftDb = global.get(\"aircraftDb\") || {};\nconst markers = [];\nlet airborne = 0;\nlet grounded = 0;\nconst now = Date.now();\n\nmsg.payload.states.forEach(row => {\n    if (!Array.isArray(row) || row.length < 17) return;\n    const icao24 = String(row[0] || \"\").toLowerCase();\n    const lon = Number(row[5]);\n    const lat = Number(row[6]);\n    if (!icao24 || !Number.isFinite(lat) || !Number.isFinite(lon)) return;\n\n    const distance = getDistanceAndBearing(centerLat, centerLon, lat, lon);\n    if (distance.distanceKm > radiusKm) return; // Trim the bounding-box corners to the requested circle.\n\n    const category = Number.isInteger(row[17]) ? row[17] : null;\n    if (category != null && category >= 16) return; // Hide service vehicles and obstacles.\n    const onGround = Boolean(row[8]);\n    const trueTrack = Number(row[10]);\n    const velocityMs = row[9] == null ? null : Number(row[9]);\n    const altitudeM = row[13] != null ? Number(row[13]) : (row[7] != null ? Number(row[7]) : null);\n    const altitudeFt = Number.isFinite(altitudeM) ? Math.max(0, Math.round(altitudeM * 3.28084 / 100) * 100) : null;\n    const speedKts = Number.isFinite(velocityMs) ? Math.max(0, Math.round(velocityMs * 1.94384)) : null;\n    const lastContact = Number(row[4]);\n    const ageSec = Number.isFinite(lastContact) ? Math.max(0, Math.round((now - lastContact * 1000) / 1000)) : null;\n    const airline = airlineInfo(row[1]);\n    const displayFlight = airline.callsign || icao24.toUpperCase();\n    const meta = aircraftDb[icao24] || {};\n    const aircraftLabel = meta.model || meta.typecode || \"\";\n    const vehicleClass = classify(meta, category);\n    const icon = vehicleClass === \"helicopter\" ? \"helicopter\" : vehicleClass === \"uav\" ? \"uav\" : vehicleClass === \"glider\" ? \"smallplane\" : \"plane\";\n    const layer = onGround ? \"On ground\" : vehicleClass === \"helicopter\" ? \"Rotorcraft\" : \"Airborne aircraft\";\n    const categoryLabel = category != null && categoryNames[category] ? categoryNames[category] : \"Unspecified\";\n\n    if (onGround) grounded++; else airborne++;\n\n    const statusColor = onGround ? \"#f59e0b\" : \"#22c55e\";\n    const rows = [\n        [\"Operator\", airline.name || \"Not identified\"],\n        [\"Altitude\", altitudeFt == null ? \"Not available\" : altitudeFt.toLocaleString(\"en-US\") + \" ft\"],\n        [\"Ground speed\", speedKts == null ? \"Not available\" : speedKts + \" kt\"],\n        [\"From center\", distance.distanceKm.toFixed(1) + \" km \" + distance.bearingCompass + \" (\" + distance.bearingDeg.toFixed(0) + \"°)\"],\n        [\"Aircraft\", aircraftLabel || categoryLabel],\n        [\"Country\", row[2] || \"Not available\"],\n        [\"Last contact\", ageSec == null ? \"Not available\" : ageSec + \"s ago\"]\n    ];\n    const detailRows = rows.map(item =>\n        \"<div style='display:grid;grid-template-columns:92px 1fr;gap:8px;padding:5px 0;border-top:1px solid #e2e8f0'>\" +\n        \"<span style='color:#64748b'>\" + escapeHtml(item[0]) + \"</span><b style='color:#0f172a'>\" + escapeHtml(item[1]) + \"</b></div>\"\n    ).join(\"\");\n    const popup = \"<div style='font:13px/1.35 system-ui,-apple-system,sans-serif;min-width:255px'>\" +\n        \"<div style='display:flex;justify-content:space-between;align-items:center;gap:12px;padding-bottom:9px'>\" +\n        \"<div><div style='font-size:18px;font-weight:800;color:#0f172a'>\" + escapeHtml(displayFlight) + \"</div>\" +\n        \"<div style='color:#64748b;text-transform:uppercase;letter-spacing:.08em;font-size:10px'>ICAO \" + escapeHtml(icao24) + \"</div></div>\" +\n        \"<span style='background:\" + statusColor + \";color:white;border-radius:999px;padding:4px 8px;font-size:10px;font-weight:800'>\" + (onGround ? \"ON GROUND\" : \"AIRBORNE\") + \"</span></div>\" +\n        detailRows + \"</div>\";\n\n    markers.push({\n        name: displayFlight + \" · \" + icao24,\n        lat,\n        lon,\n        layer,\n        icon,\n        iconColor: airline.color,\n        iconSize: 26,\n        bearing: Number.isFinite(trueTrack) ? trueTrack : 0,\n        ttl: Math.max(90, Number(cfg.pollSeconds || 300) + 120),\n        tooltip: displayFlight + (altitudeFt == null ? \"\" : \" • \" + altitudeFt.toLocaleString(\"en-US\") + \" ft\"),\n        popup,\n        contextmenu: \"\"\n    });\n});\n\nconst responseTime = Number(msg.payload.time);\nconst updated = Number.isFinite(responseTime) ? new Date(responseTime * 1000) : new Date();\nconst updatedLabel = updated.toISOString().slice(11, 19) + \" UTC\";\nconst remaining = getHeader(msg.headers, \"x-rate-limit-remaining\");\nconst authLabel = msg._openskyAuthMode === \"authenticated\" ? \"Authenticated\" : \"Anonymous\";\nconst legend = \"<div style='font:12px/1.4 system-ui;min-width:190px'>\" +\n    \"<b style='font-size:13px'>Live radar status</b><br>\" +\n    \"<span style='color:#22c55e'>●</span> \" + airborne + \" airborne &nbsp; \" +\n    \"<span style='color:#f59e0b'>●</span> \" + grounded + \" on ground<br>\" +\n    \"Updated \" + updatedLabel + \" • \" + authLabel +\n    (remaining !== \"\" ? \"<br>API credits remaining: \" + escapeHtml(remaining) : \"\") + \"</div>\";\n\nconst title = \"OpenSky Live Air Traffic • \" + markers.length + \" aircraft\";\nflow.set(\"openskyRadarStatus\", { title, legend, updatedAt: updated.toISOString() });\n// A Function output can emit an array of messages. The worldmap node expects\n// one marker object per message, not an array inside a single msg.payload.\nconst markerMessages = markers.map(marker => ({ payload: marker }));\nconst uiMessage = {\n    payload: {\n        command: {\n            toptitle: title,\n            legend,\n            showdialog: \"\"\n        }\n    }\n};\nnode.status({ fill: \"green\", shape: \"dot\", text: markers.length + \" aircraft • \" + updatedLabel });\nreturn [markerMessages, uiMessage, null];",
+        "outputs": 3,
         "timeout": "",
         "noerr": 0,
         "initialize": "",
         "finalize": "",
         "libs": [],
-        "x": 1010,
+        "x": 1040,
         "y": 120,
         "wires": [
             [
                 "8b2f9f5e1f0a2940"
+            ],
+            [
+                "8b2f9f5e1f0a2940"
+            ],
+            [
+                "debug-errors"
             ]
         ]
+    },
+    {
+        "id": "worldmap-in",
+        "type": "worldmap in",
+        "z": "79536b1f3c9bef45",
+        "name": "When a map viewer connects",
+        "path": "/worldmapplanes",
+        "events": "connect",
+        "x": 180,
+        "y": 220,
+        "wires": [
+            [
+                "map-ui-builder"
+            ]
+        ]
+    },
+    {
+        "id": "map-ui-builder",
+        "type": "function",
+        "z": "79536b1f3c9bef45",
+        "name": "Build title, range & center",
+        "func": "// Rebuild the static map UI whenever a browser connects or config changes.\nconst cfg = msg.openskyConfig || flow.get(\"openskyRadarConfig\") || {\n    centerLat: 25.7617,\n    centerLon: -80.1918,\n    radiusKm: 200\n};\nconst radarStatus = flow.get(\"openskyRadarStatus\") || {};\nconst dLat = Number(cfg.radiusKm) / 111;\nconst safeCos = Math.max(Math.abs(Math.cos(Number(cfg.centerLat) * Math.PI / 180)), 0.05);\nconst dLon = Number(cfg.radiusKm) / (111 * safeCos);\n\nconst commandMessage = {\n    _sessionid: msg._sessionid,\n    payload: {\n        command: {\n            bounds: [\n                [Math.max(-90, Number(cfg.centerLat) - dLat), Math.max(-180, Number(cfg.centerLon) - dLon)],\n                [Math.min(90, Number(cfg.centerLat) + dLat), Math.min(180, Number(cfg.centerLon) + dLon)]\n            ],\n            toptitle: radarStatus.title || \"OpenSky Live Air Traffic\",\n            legend: radarStatus.legend || \"<div style='font:12px/1.4 system-ui'><b>Live radar status</b><br>Waiting for the first OpenSky update…</div>\",\n            hiderightclick: true,\n            contextmenu: \"\",\n            sidcEdgeIcon: false\n        }\n    }\n};\nconst rangeMessage = {\n    _sessionid: msg._sessionid,\n    payload: {\n        name: \"Radar range\",\n        lat: Number(cfg.centerLat),\n        lon: Number(cfg.centerLon),\n        radius: Number(cfg.radiusKm) * 1000,\n        layer: \"Radar coverage\",\n        color: \"#38bdf8\",\n        fillColor: \"#38bdf8\",\n        fillOpacity: 0.04,\n        opacity: 0.7,\n        weight: 2,\n        dashArray: \"8 8\",\n        ttl: 0,\n        clickable: true,\n        popup: \"<b>Radar coverage</b><br>\" + Number(cfg.radiusKm).toFixed(0) + \" km from the selected center.\",\n        contextmenu: \"\"\n    }\n};\nconst centerMessage = {\n    _sessionid: msg._sessionid,\n    payload: {\n        name: \"Radar Center\",\n        lat: Number(cfg.centerLat),\n        lon: Number(cfg.centerLon),\n        layer: \"Radar coverage\",\n        icon: \"home\",\n        iconColor: \"#38bdf8\",\n        iconSize: 28,\n        ttl: 0,\n        tooltip: \"Radar Center • \" + Number(cfg.radiusKm).toFixed(0) + \" km range\",\n        popup: \"<b>Radar Center</b><br>Latitude: \" + Number(cfg.centerLat).toFixed(4) +\n            \"<br>Longitude: \" + Number(cfg.centerLon).toFixed(4) +\n            \"<br>Search radius: \" + Number(cfg.radiusKm).toFixed(0) + \" km\",\n        contextmenu: \"\"\n    }\n};\nreturn [commandMessage, rangeMessage, centerMessage];",
+        "outputs": 3,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 500,
+        "y": 220,
+        "wires": [
+            [
+                "8b2f9f5e1f0a2940"
+            ],
+            [
+                "8b2f9f5e1f0a2940"
+            ],
+            [
+                "8b2f9f5e1f0a2940"
+            ]
+        ]
+    },
+    {
+        "id": "http-catch",
+        "type": "catch",
+        "z": "79536b1f3c9bef45",
+        "name": "Catch OpenSky HTTP errors",
+        "scope": [
+            "oauth-http",
+            "b2e35e98c3c86b21"
+        ],
+        "uncaught": false,
+        "x": 760,
+        "y": 260,
+        "wires": [
+            [
+                "network-error-handler"
+            ]
+        ]
+    },
+    {
+        "id": "network-error-handler",
+        "type": "function",
+        "z": "79536b1f3c9bef45",
+        "name": "Show safe connection error",
+        "func": "// Convert transport failures into a visible map message and a safe Debug entry.\nconst detail = msg.error && msg.error.message ? msg.error.message : \"The HTTP request could not be completed.\";\nconst ui = {\n    payload: {\n        command: {\n            toptitle: \"OpenSky Radar • connection problem\",\n            showdialog: \"<div style='font-family:system-ui;min-width:260px'><b>OpenSky connection problem</b><br>Check internet/DNS access from the Node-RED host. Existing aircraft remain visible during the refresh grace period.</div>\"\n        }\n    }\n};\nconst debug = { payload: { source: \"OpenSky HTTP\", message: detail } };\nnode.status({ fill: \"red\", shape: \"ring\", text: \"OpenSky connection failed\" });\nreturn [ui, debug];",
+        "outputs": 2,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1030,
+        "y": 260,
+        "wires": [
+            [
+                "8b2f9f5e1f0a2940"
+            ],
+            [
+                "debug-errors"
+            ]
+        ]
+    },
+    {
+        "id": "debug-errors",
+        "type": "debug",
+        "z": "79536b1f3c9bef45",
+        "name": "OpenSky errors only",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1300,
+        "y": 260,
+        "wires": []
     },
     {
         "id": "8b2f9f5e1f0a2940",
         "type": "worldmap",
         "z": "79536b1f3c9bef45",
-        "name": "Nearby planes map",
+        "name": "OpenSky Live Air Traffic",
         "lat": "25.7617",
         "lon": "-80.1918",
         "zoom": "7",
-        "layer": "EsriT",
+        "layer": "EsriDG",
         "cluster": "",
-        "maxage": "0",
+        "maxage": "420",
         "usermenu": "show",
         "layers": "show",
         "panit": "false",
-        "hiderightclick": "false",
-        "coords": "none",
+        "panlock": "false",
+        "zoomlock": "false",
+        "hiderightclick": "true",
+        "coords": "deg",
+        "showgrid": "false",
         "showruler": "true",
+        "allowFileDrop": "false",
         "path": "worldmapplanes",
-        "overlist": "DR,CO,RA,DN,HM",
-        "maplist": "OSMG,OSMC,OSMH,EsriC,EsriS,EsriT,EsriO,EsriDG,NatGeo,UKOS,OpTop",
+        "overlist": "CO,RA,DN,HM",
+        "maplist": "OSMG,OSMC,OSMH,EsriC,EsriS,EsriT,EsriO,EsriDG,NatGeo,OpTop",
         "mapname": "",
         "mapurl": "",
         "mapopt": "",
         "mapwms": false,
-        "x": 1250,
-        "y": 60,
+        "x": 1320,
+        "y": 120,
         "wires": []
-    },
-    {
-        "id": "7c2b649ba9028533",
-        "type": "function",
-        "z": "79536b1f3c9bef45",
-        "name": "Send home marker",
-        "func": "// Home / Radar Center marker for worldmap\n// Reads the current radar config from flow.openskyRadarConfig\n// so you only have to set your location in ONE place.\n\n// Fallback to Miami if config is missing (first run)\nconst cfg = flow.get(\"openskyRadarConfig\") || {\n    centerLat: 25.7617,\n    centerLon: -80.1918\n};\n\nmsg.payload = {\n    name: \"Radar Center\",\n    lat: cfg.centerLat,\n    lon: cfg.centerLon,\n    layer: \"Reference\",\n    icon: \"home\",\n    popup: \"<strong>Radar Center</strong><br>This is the center of your search radius.\"\n};\n\nreturn msg;\n",
-        "outputs": 1,
-        "timeout": 0,
-        "noerr": 0,
-        "initialize": "",
-        "finalize": "",
-        "libs": [],
-        "x": 410,
-        "y": 60,
-        "wires": [
-            [
-                "8b2f9f5e1f0a2940"
-            ]
-        ]
-    },
-    {
-        "id": "3164dd3c5ca0f708",
-        "type": "inject",
-        "z": "79536b1f3c9bef45",
-        "name": "",
-        "props": [
-            {
-                "p": "payload"
-            },
-            {
-                "p": "topic",
-                "vt": "str"
-            }
-        ],
-        "repeat": "",
-        "crontab": "",
-        "once": true,
-        "onceDelay": 0.1,
-        "topic": "",
-        "payload": "",
-        "payloadType": "date",
-        "x": 110,
-        "y": 60,
-        "wires": [
-            [
-                "7c2b649ba9028533"
-            ]
-        ]
     },
     {
         "id": "c203843dbef7cbe2",
         "type": "global-config",
         "env": [],
         "modules": {
-            "node-red-contrib-web-worldmap": "5.5.4"
+            "node-red-contrib-web-worldmap": "5.8.1"
         }
     }
 ]
