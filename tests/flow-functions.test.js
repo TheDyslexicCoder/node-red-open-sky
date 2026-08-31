@@ -5,6 +5,13 @@ const test = require("node:test");
 
 const flowPath = path.join(__dirname, "..", "OpenSky-Planes-WorldMap.json");
 const flowDefinition = JSON.parse(fs.readFileSync(flowPath, "utf8"));
+const airlabsSmokeTestPath = path.join(__dirname, "..", "scripts", "airlabs-smoke.js");
+
+function extractRequestedFields(source) {
+    const match = source.match(/const fields = \[([\s\S]*?)\]\.join\(","\);/);
+    assert.ok(match, "missing AirLabs fields list");
+    return Array.from(match[1].matchAll(/"([a-z_]+)"/g), item => item[1]);
+}
 
 function store(initial = {}) {
     const values = { ...initial };
@@ -57,6 +64,10 @@ test("flow is structurally complete and every Function node compiles", () => {
             assert.doesNotThrow(() => new Function("msg", "node", "flow", "global", "env", "context", node.func));
         }
     }
+    const smokeSource = fs.readFileSync(airlabsSmokeTestPath, "utf8");
+    assert.doesNotThrow(() => new Function(smokeSource));
+    const prepareSource = flowDefinition.find(node => node.id === "airlabs-prepare-requests").func;
+    assert.deepEqual(extractRequestedFields(smokeSource), extractRequestedFields(prepareSource));
 });
 
 const airportDirectory = [
@@ -117,6 +128,16 @@ test("AirLabs request preparation follows Chicago and creates only two guarded r
     assert.match(result[0][0].url, /dep_iata=MDW/);
     assert.match(result[0][1].url, /arr_iata=MDW/);
     assert.ok(result[0].every(message => message.url.includes("test-only-key")));
+    const requestUrl = new URL(result[0][0].url);
+    assert.equal(requestUrl.pathname, "/api/v9/schedules");
+    assert.equal(requestUrl.searchParams.get("limit"), "50");
+    const requestedFields = new Set(requestUrl.searchParams.get("_fields").split(","));
+    for (const documentedField of [
+        "flight_iata", "flight_icao", "cs_airline_iata", "cs_flight_iata", "cs_flight_number",
+        "dep_iata", "dep_time", "dep_delayed", "arr_iata", "arr_time", "arr_delayed", "status"
+    ]) assert.ok(requestedFields.has(documentedField), `missing documented field ${documentedField}`);
+    assert.equal(requestedFields.has("cs_flight_icao"), false);
+    assert.equal(requestedFields.has("updated"), false);
     assert.equal(rt.flow.values.airlabsRequestUsage.count, 2);
 
     const second = execute("airlabs-prepare-requests", rt);
@@ -195,8 +216,9 @@ test("AirLabs responses are minimized, indexed, and stripped of request secrets"
             _airlabsConfig: sharedFlow.values.openskyScheduleConfig,
             payload: { response: [{
                 flight_icao: "AAL123", flight_iata: "AA123", flight_number: "123",
+                cs_airline_iata: "BA", cs_flight_iata: "BA2421", cs_flight_number: "2421",
                 airline_icao: "AAL", airline_iata: "AA", dep_iata: "MIA", dep_icao: "KMIA",
-                arr_iata: "JFK", arr_icao: "KJFK", dep_time: "2026-08-30 10:00",
+                dep_terminal: "D", dep_gate: "D12", arr_iata: "JFK", arr_icao: "KJFK", dep_time: "2026-08-30 10:00",
                 arr_time: "2026-08-30 13:00", arr_estimated: "2026-08-30 13:20",
                 arr_terminal: "8", arr_gate: "42", arr_delayed: 20, status: "active"
             }] }
@@ -206,7 +228,68 @@ test("AirLabs responses are minimized, indexed, and stripped of request secrets"
     assert.equal(departure.msg.url, undefined);
     assert.equal(sharedFlow.values.airlabsScheduleCache.byFlight.AAL123.destinationIata, "JFK");
     assert.equal(sharedFlow.values.airlabsScheduleCache.byFlight.AA123.arrivalGate, "42");
+    assert.equal(sharedFlow.values.airlabsScheduleCache.byFlight.BA2421.codeshareAirlineIata, "BA");
+    assert.equal(sharedFlow.values.airlabsScheduleMeta.records, 1);
+    assert.ok(sharedFlow.values.airlabsScheduleCache.staleUntil - sharedFlow.values.airlabsScheduleCache.fetchedAt <= 6 * 60 * 60 * 1000);
+    assert.equal(sharedFlow.values.airlabsScheduleCache.byFlight.AAL123.codeshareFlightIcao, undefined);
+    assert.equal(sharedFlow.values.airlabsScheduleCache.byFlight.AAL123.providerUpdated, undefined);
     assert.doesNotMatch(JSON.stringify(sharedFlow.values.airlabsScheduleCache), /test-only-key/);
+});
+
+test("AirLabs direct-array responses are accepted", () => {
+    const sharedFlow = store({
+        openskyScheduleConfig: { airportIata: "SFO", refreshMinutes: 120, maxRecords: 50, estimatedMonthlyRequests: 720 }
+    });
+    const rt = runtime({
+        flow: sharedFlow,
+        msg: {
+            statusCode: 200,
+            _airlabsDirection: "arrivals",
+            _airlabsConfig: sharedFlow.values.openskyScheduleConfig,
+            payload: [{ flight_iata: "UA100", dep_iata: "ORD", arr_iata: "SFO", arr_time: "2026-08-30 13:00" }]
+        }
+    });
+    assert.equal(execute("airlabs-cache-schedules", rt), null);
+    assert.equal(sharedFlow.values.airlabsScheduleCache.byFlight.UA100.originIata, "ORD");
+});
+
+test("all documented AirLabs API errors become safe actionable Debug messages", () => {
+    const codes = [
+        "unknown_api_key", "expired_api_key", "unknown_method", "wrong_params", "not_found",
+        "minute_limit_exceeded", "hour_limit_exceeded", "month_limit_exceeded", "internal_error"
+    ];
+    for (const code of codes) {
+        const sharedFlow = store();
+        const rt = runtime({
+            flow: sharedFlow,
+            msg: {
+                statusCode: 200,
+                url: "https://airlabs.co/api/v9/schedules?api_key=test-only-key",
+                _airlabsDirection: "departures",
+                payload: { error: { code, message: "provider message" } }
+            }
+        });
+        const result = execute("airlabs-cache-schedules", rt);
+        assert.equal(result.payload.errorCode, code);
+        assert.equal(sharedFlow.values.airlabsScheduleMeta.lastErrorCode, code);
+        assert.equal(rt.msg.url, undefined);
+        assert.doesNotMatch(JSON.stringify(result), /test-only-key/);
+    }
+});
+
+test("AirLabs transport failures discard the failed request URL", () => {
+    const sharedFlow = store();
+    const rt = runtime({
+        flow: sharedFlow,
+        msg: {
+            url: "https://airlabs.co/api/v9/schedules?api_key=test-only-key",
+            error: { message: "connection failed" }
+        }
+    });
+    const result = execute("airlabs-safe-error", rt);
+    assert.equal(result.payload.message, "The schedule request could not be completed.");
+    assert.equal(sharedFlow.values.airlabsScheduleMeta.lastErrorCode, "network_error");
+    assert.doesNotMatch(JSON.stringify(result), /test-only-key|api_key/);
 });
 
 test("matching live aircraft receive cached route and schedule rows", () => {
@@ -240,6 +323,49 @@ test("matching live aircraft receive cached route and schedule rows", () => {
     assert.match(popup, /20 min/);
     assert.match(popup, /Terminal 8 • Gate 42/);
     assert.match(popup, /Schedule source/);
+});
+
+test("departure-board matches display the selected airport departure gate", () => {
+    const now = Date.now();
+    const schedule = {
+        originIata: "MIA", destinationIata: "JFK", boardDirection: "departures",
+        departureTerminal: "D", departureGate: "D12", arrivalTerminal: "8", arrivalGate: "42"
+    };
+    const rt = runtime({
+        flow: store({
+            airlabsScheduleCache: {
+                byFlight: { AAL123: schedule, AA123: schedule }, fetchedAt: now,
+                expiresAt: now + 60_000, staleUntil: now + 60_000
+            }
+        }),
+        msg: { payload: {
+            name: "AAL123 · a1b2c3",
+            popup: "<div><span style='color:#64748b'>Operator</span><b style='color:#0f172a'>Not identified</b></div>"
+        } }
+    });
+    execute("operator-label-resolver", rt);
+    assert.match(rt.msg.payload.popup, /Departure/);
+    assert.match(rt.msg.payload.popup, /Terminal D • Gate D12/);
+    assert.doesNotMatch(rt.msg.payload.popup, /Terminal 8 • Gate 42/);
+});
+
+test("documented AirLabs codeshare IATA flights match an OpenSky ICAO callsign", () => {
+    const now = Date.now();
+    const schedule = { originIata: "MIA", destinationIata: "LHR", codeshareFlightIata: "BA2421" };
+    const rt = runtime({
+        flow: store({
+            airlabsScheduleCache: {
+                byFlight: { BA2421: schedule }, fetchedAt: now,
+                expiresAt: now + 60_000, staleUntil: now + 60_000
+            }
+        }),
+        msg: { payload: {
+            name: "BAW2421 · a1b2c3",
+            popup: "<div><span style='color:#64748b'>Operator</span><b style='color:#0f172a'>Not identified</b></div>"
+        } }
+    });
+    execute("operator-label-resolver", rt);
+    assert.match(rt.msg.payload.popup, /MIA → LHR/);
 });
 
 test("expired schedule data is not added to aircraft popups", () => {
@@ -293,7 +419,26 @@ test("OpenSky aircraft outside the circular radius are discarded", () => {
     });
     const result = execute("3c0b81a6774da40c", rt);
     assert.equal(result[0].length, 1);
+    assert.equal(result[0][0].payload.ttl, 420);
     assert.equal(sharedFlow.values.openskyRadarStatus.aircraftCount, 1);
+});
+
+test("cached schedules never keep an aircraft marker after it leaves the radius", () => {
+    const now = Date.now();
+    const sharedFlow = store({
+        openskyRadarConfig: { centerLat: 25.7617, centerLon: -80.1918, radiusKm: 150, pollSeconds: 300 },
+        airlabsScheduleCache: {
+            byFlight: { AAL123: { originIata: "MIA", destinationIata: "JFK" } },
+            fetchedAt: now, expiresAt: now + 60_000, staleUntil: now + 60_000
+        }
+    });
+    const rt = runtime({
+        flow: sharedFlow,
+        msg: { statusCode: 200, _openskyAuthMode: "anonymous", payload: { states: [] } }
+    });
+    const result = execute("3c0b81a6774da40c", rt);
+    assert.equal(result[0].length, 0);
+    assert.ok(sharedFlow.values.airlabsScheduleCache.byFlight.AAL123, "the reusable lookup may remain cached");
 });
 
 test("the periodic health summary is nonempty and contains no credentials", () => {
