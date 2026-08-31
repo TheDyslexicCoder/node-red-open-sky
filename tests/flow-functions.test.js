@@ -458,3 +458,47 @@ test("the periodic health summary is nonempty and contains no credentials", () =
     assert.equal(result.payload.schedules.monthlyRequestsUsed, 24);
     assert.doesNotMatch(JSON.stringify(result), /must-not-appear|api_key|secret/i);
 });
+
+test("the flow tab exposes editor-based AirLabs and polling configuration", () => {
+    const tab = flowDefinition.find(node => node.type === "tab");
+    assert.deepEqual(tab.env, []);
+    assert.match(tab.info, /Environment Variables/);
+    assert.match(tab.info, /AIRLABS_API_KEY/);
+    assert.match(tab.info, /OPENSKY_POLL_SECONDS/);
+});
+
+test("OpenSky polling metadata follows the editor environment value", () => {
+    for (const seconds of [20, 60, 300]) {
+        const rt = runtime({ env: { OPENSKY_POLL_SECONDS: String(seconds) } });
+        const result = execute("f11a5f6d0e8f2c33", rt);
+        assert.equal(result[0].openskyConfig.pollSeconds, seconds);
+        assert.equal(rt.flow.values.openskyRadarConfig.pollSeconds, seconds);
+    }
+
+    const invalid = runtime({ env: { OPENSKY_POLL_SECONDS: "10" } });
+    assert.equal(execute("f11a5f6d0e8f2c33", invalid), null);
+    assert.match(invalid.errors[0], /between 20 and 3600/);
+});
+
+test("the dedicated AirLabs status is useful and credential-free", () => {
+    const now = Date.now();
+    const rt = runtime({
+        env: { AIRLABS_API_KEY: "must-not-appear" },
+        flow: store({
+            openskyScheduleConfig: {
+                airportIata: "MIA", airportName: "Miami International Airport",
+                airportDistanceKm: 10.5, selectionMode: "nearest-in-radius",
+                refreshMinutes: 120, estimatedMonthlyRequests: 720, monthlyRequestCap: 900
+            },
+            airlabsScheduleMeta: { enabled: true, ready: true, records: 50, matchKeys: 72 },
+            airlabsScheduleCache: { fetchedAt: now - 60_000 },
+            airlabsRequestUsage: { month: "2026-08", count: 2 }
+        })
+    });
+    const result = execute("airlabs-health-summary", rt);
+    assert.equal(result.payload.enabled, true);
+    assert.equal(result.payload.selectedAirport, "MIA");
+    assert.equal(result.payload.records, 50);
+    assert.equal(result.payload.monthlyRequestsUsed, 2);
+    assert.doesNotMatch(JSON.stringify(result), /must-not-appear|api_key|request url/i);
+});
