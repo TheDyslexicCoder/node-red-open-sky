@@ -139,12 +139,12 @@ The included free-tier defaults are deliberately conservative:
 - Each refresh uses two requests: one departure board and one arrival board for the selected airport.
 - A 120-minute refresh interval is approximately **720 requests per 30-day month**.
 - A separate monthly guard stops automatic calls at 900 requests by default, leaving headroom under a stated 1,000-request plan.
-- Each direction is limited to 50 schedule records.
+- Each direction is retained locally at a maximum of 50 schedule records, even if the provider returns a larger page.
 - Current schedule data is retained between live five-minute OpenSky polls, while the airport directory refreshes only weekly.
 - If AirLabs fails, the last successful schedule may remain visible for up to 6 hours and is clearly marked as cached.
 - The cache is held in Node-RED flow context and does not survive a Node-RED restart unless you configure persistent context storage.
 
-AirLabs documents a maximum 50 records per free-key schedule request and a schedule horizon of up to 10 hours. A busy airport can therefore have more flights than this flow caches. Core free-plan fields include flight number, origin, destination, and scheduled times; gates, terminals, estimates, actual times, delays, status, ICAO fields, and codeshares can be missing or plan-dependent. The popup omits unavailable values instead of inventing them. Confirm the current [AirLabs introduction and error documentation](https://airlabs.co/docs/) and [Schedules documentation](https://airlabs.co/docs/schedules), plus the limits shown in your account dashboard, before changing the refresh interval or monthly guard.
+AirLabs documents a maximum 50 records for Free keys and a schedule horizon of up to 10 hours. During the August 31, 2026 live MIA validation, the v9 endpoint accepted `limit=50` but returned a 100-row provider page with pagination metadata. The flow therefore treats the query limit as a request hint and independently slices each direction to 50 before caching. A busy airport can still have more flights than this flow retains. Core free-plan fields include flight number, origin, destination, and scheduled times; gates, terminals, estimates, actual times, delays, status, ICAO fields, and codeshares can be missing or plan-dependent. The popup omits unavailable values instead of inventing them. Confirm the current [AirLabs introduction and error documentation](https://airlabs.co/docs/) and [Schedules documentation](https://airlabs.co/docs/schedules), plus the limits shown in your account dashboard, before changing the refresh interval or monthly guard.
 
 Only flights connected to the selected airport can receive schedule details. Aircraft merely passing through the radar circle, private aircraft, and flights missing a matching published designator continue to show their OpenSky and FAA information without a guessed schedule. Automatic selection never chooses an airport outside the configured radar radius.
 
@@ -171,7 +171,7 @@ To verify the active key and current account entitlement before deploying, run t
 AIRLABS_TEST_AIRPORT=MIA npm run test:airlabs
 ```
 
-Set `AIRLABS_API_KEY` in the terminal environment first; do not paste the key into the command, repository, or script. The smoke test uses exactly two AirLabs requests—one departure and one arrival request with `limit=1`—and prints only the airport, counts, and returned field names. It never prints the key or request URL.
+Set `AIRLABS_API_KEY` in the terminal environment first; do not paste the key into the command, repository, or script. The smoke test uses exactly two AirLabs requests—one departure and one arrival request—and prints only the airport, provider and retained counts, safe pagination totals, and returned field names. It never prints the key, request URL, flight rows, or provider request metadata that could contain credential information.
 
 In the **System health (safe, every 5 min)** Debug output, confirm:
 
