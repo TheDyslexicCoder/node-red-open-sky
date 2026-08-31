@@ -82,6 +82,8 @@ The radar is not hardcoded to Miami. It downloads the public-domain [OurAirports
 
 The radar works without OurAirports or AirLabs. OurAirports needs no API key. When AirLabs enrichment is enabled, the flow downloads one departure board and one arrival board for the selected airport, minimizes the response, and reuses that cache for matching live aircraft. It does **not** make one schedule request per aircraft.
 
+The integration is intentionally limited to the parts of AirLabs used by this flow: the current v9 authentication, endpoint, field-selection, Schedules response, pagination/limit, and common-error documentation. Other AirLabs endpoints—Real-Time Flights, Flight Information, Routes, Delays, and Alerts—are not called. OpenSky remains the source for live positions.
+
 Create or activate an [AirLabs](https://airlabs.co/) account, then provide the key to the Node-RED process through an environment variable:
 
 ```text
@@ -100,14 +102,46 @@ The included free-tier defaults are deliberately conservative:
 - A separate monthly guard stops automatic calls at 900 requests by default, leaving headroom under a stated 1,000-request plan.
 - Each direction is limited to 50 schedule records.
 - Current schedule data is retained between live five-minute OpenSky polls, while the airport directory refreshes only weekly.
-- If AirLabs fails, the last successful schedule may remain visible for up to 12 hours and is clearly marked as cached.
+- If AirLabs fails, the last successful schedule may remain visible for up to 6 hours and is clearly marked as cached.
 - The cache is held in Node-RED flow context and does not survive a Node-RED restart unless you configure persistent context storage.
 
-AirLabs currently documents a limited free plan, but quotas, available fields, registration access, and terms can change. Confirm the current [AirLabs schedule documentation](https://airlabs.co/docs/schedules) and account limits before shortening the refresh interval.
+AirLabs documents a maximum 50 records per free-key schedule request and a schedule horizon of up to 10 hours. A busy airport can therefore have more flights than this flow caches. Core free-plan fields include flight number, origin, destination, and scheduled times; gates, terminals, estimates, actual times, delays, status, ICAO fields, and codeshares can be missing or plan-dependent. The popup omits unavailable values instead of inventing them. Confirm the current [AirLabs introduction and error documentation](https://airlabs.co/docs/) and [Schedules documentation](https://airlabs.co/docs/schedules), plus the limits shown in your account dashboard, before changing the refresh interval or monthly guard.
 
 Only flights connected to the selected airport can receive schedule details. Aircraft merely passing through the radar circle, private aircraft, and flights missing a matching published designator continue to show their OpenSky and FAA information without a guessed schedule. Automatic selection never chooses an airport outside the configured radar radius.
 
 The world-map URL remains `http://<your-node-red-host>:1880/worldmapplanes`; moving the center does not require a new URL or a separate flow.
+
+### Why five-minute positions and two-hour schedules work together
+
+The two clocks serve different data:
+
+1. **Every five minutes, OpenSky is queried for current aircraft positions.** Only aircraft still inside the exact circle become map markers.
+2. **Every two hours, AirLabs refreshes the selected airport's timetable.** The two responses can contain up to 50 departures and 50 arrivals, extending up to 10 hours ahead.
+3. **On every OpenSky update, each current marker is matched against the cached timetable.** The resolver tries the broadcast ICAO callsign, its known IATA equivalent, and documented AirLabs codeshare flight numbers.
+4. **The schedule cache never creates or preserves an aircraft marker.** If a plane leaves the circle, it is absent from the next OpenSky result and its marker expires after the normal seven-minute grace period. Its unused timetable row may remain cached for another aircraft or update.
+
+This saves requests, but it is not universal route coverage. A flight using the selected airport may receive a route and schedule. An overflight or a flight using another nearby airport usually will not. Covering every visible aircraft would require more airport boards or per-flight/route calls and a larger API budget.
+
+### First-deployment verification
+
+With `AIRLABS_API_KEY` set in the Node-RED process environment, restart Node-RED, import or update the flow, and deploy it. The startup OurAirports download triggers the first AirLabs refresh immediately after the directory is ready; it does not wait for the ten-minute schedule tick.
+
+To verify the active key and current account entitlement before deploying, run the opt-in smoke test from this repository:
+
+```bash
+AIRLABS_TEST_AIRPORT=MIA npm run test:airlabs
+```
+
+Set `AIRLABS_API_KEY` in the terminal environment first; do not paste the key into the command, repository, or script. The smoke test uses exactly two AirLabs requests—one departure and one arrival request with `limit=1`—and prints only the airport, counts, and returned field names. It never prints the key or request URL.
+
+In the **System health (safe, every 5 min)** Debug output, confirm:
+
+- `airports.selectedIata` is the expected airport and `distanceKm` is within the radius.
+- `schedules.enabled` and `schedules.ready` are `true`.
+- `schedules.updatedAt` is populated and `monthlyRequestsUsed` begins at `2`.
+- `schedules.records` is greater than zero for an active major-airport board.
+
+The health message appears automatically after startup and every five minutes. You can also click the **Report safe health every 5 min** Inject node to check immediately. If AirLabs rejects the request, **Errors only (empty is healthy)** reports a sanitized code such as `unknown_api_key`, `wrong_params`, or `month_limit_exceeded`; it never prints the key or request URL.
 
 ## Runtime overrides
 
@@ -169,9 +203,9 @@ The separate **System health (safe, every 5 min)** Debug node now confirms routi
 | Waiting for airport directory | The weekly OurAirports download has not completed yet | Confirm outbound HTTPS access to `davidmegginson.github.io`; cached data is reused when available |
 | No scheduled airport in radar radius | No scheduled-service airport with an IATA code is inside the selected circle | Increase the radius moderately or deliberately set `AIRLABS_AIRPORT_IATA` |
 | AirLabs disabled • airport selected | Automatic airport selection works, but optional schedule enrichment is not configured | Set a new `AIRLABS_API_KEY` outside the flow and restart Node-RED |
-| AirLabs schedule error | The key is inactive, waitlisted, invalid, rate-limited, or the response changed | Check `flow.airlabsScheduleMeta` and the Debug sidebar without exposing the key |
+| AirLabs schedule error | The key is inactive, expired, invalid, rate-limited, the parameters were rejected, or the response changed | Check the sanitized `lastErrorCode` in `flow.airlabsScheduleMeta` and the errors-only Debug node |
 | AirLabs monthly request guard reached | The configured safety cap has been reached | Wait for the next UTC month or deliberately raise `monthlyRequestCap` after checking the account quota |
-| AirLabs unavailable • cached schedules active | A refresh failed, but the previous minimized response is still within its 12-hour stale window | Live OpenSky tracking continues; check the provider later |
+| AirLabs unavailable • cached schedules active | A refresh failed, but the previous minimized response is still within its 6-hour stale window | Live OpenSky tracking continues; check the provider later |
 | Aircraft has no route or schedule | It does not match the selected airport board or a published flight designator | This is expected for pass-through, private, and unmatched flights |
 
 ## Data notes
@@ -190,13 +224,15 @@ Review OpenSky's [API documentation and terms](https://openskynetwork.github.io/
 
 ## Validation tests
 
-The repository includes dependency-free tests for node wiring, Function-node syntax, OurAirports CSV parsing, Miami/Chicago/San Francisco selection, radius enforcement, disabled-provider behavior, the two-request guard, schedule minimization, secret removal, cache matching, health output, and stale-data expiry:
+The repository includes dependency-free tests for node wiring, Function-node syntax, OurAirports CSV parsing, Miami/Chicago/San Francisco selection, radius enforcement, disabled-provider behavior, the two-request guard, documented AirLabs request fields and error codes, direct and wrapped response shapes, codeshare matching, correct departure/arrival gates, schedule minimization, secret removal, aircraft-marker expiry, health output, and stale-data expiry:
 
 ```bash
 npm test
 ```
 
 The tests use fictional schedule responses and a test-only credential string. They never require or contact AirLabs.
+
+`npm run test:airlabs` is separate and opt-in because it contacts AirLabs and consumes two real requests. It requires `AIRLABS_API_KEY` in the environment.
 
 ## License
 
