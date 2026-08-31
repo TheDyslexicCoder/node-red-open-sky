@@ -4,7 +4,8 @@
   "private": true,
   "description": "Validation tests for the Node-RED OpenSky radar flow",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "test:airlabs": "node scripts/airlabs-smoke.js"
   },
   "engines": {
     "node": ">=18"
