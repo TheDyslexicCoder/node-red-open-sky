@@ -411,6 +411,7 @@ test("OpenSky aircraft outside the circular radius are discarded", () => {
         msg: {
             statusCode: 200,
             _openskyAuthMode: "anonymous",
+            headers: { "x-rate-limit-remaining": "399" },
             payload: { states: [
                 state("a1b2c3", "AAL123", 25.8, -80.3),
                 state("d4e5f6", "DAL456", 29.5, -80.3)
@@ -421,6 +422,7 @@ test("OpenSky aircraft outside the circular radius are discarded", () => {
     assert.equal(result[0].length, 1);
     assert.equal(result[0][0].payload.ttl, 420);
     assert.equal(sharedFlow.values.openskyRadarStatus.aircraftCount, 1);
+    assert.equal(sharedFlow.values.openskyRadarStatus.creditsRemaining, 399);
 });
 
 test("cached schedules never keep an aircraft marker after it leaves the radius", () => {
@@ -443,8 +445,8 @@ test("cached schedules never keep an aircraft marker after it leaves the radius"
 
 test("the periodic health summary is nonempty and contains no credentials", () => {
     const sharedFlow = store({
-        openskyRadarConfig: { centerLat: 37.7749, centerLon: -122.4194, radiusKm: 150, authConfigured: true },
-        openskyRadarStatus: { aircraftCount: 12, airborne: 11, grounded: 1, updatedAt: "2026-08-30T12:00:00.000Z", authMode: "Authenticated" },
+        openskyRadarConfig: { centerLat: 37.7749, centerLon: -122.4194, radiusKm: 150, authConfigured: true, estimatedCreditCost: 1, pollSeconds: 60 },
+        openskyRadarStatus: { aircraftCount: 12, airborne: 11, grounded: 1, updatedAt: "2026-08-30T12:00:00.000Z", authMode: "Authenticated", creditsRemaining: 3850 },
         faaOperatorDirectoryMeta: { count: 6500, updatedAt: "2026-08-30T01:00:00.000Z" },
         ourAirportsMeta: { count: 3000, updatedAt: "2026-08-30T02:00:00.000Z" },
         openskyScheduleConfig: { airportIata: "SFO", airportName: "San Francisco International Airport", airportDistanceKm: 18, selectionMode: "nearest-in-radius", monthlyRequestCap: 900 },
@@ -454,6 +456,10 @@ test("the periodic health summary is nonempty and contains no credentials", () =
     const rt = runtime({ flow: sharedFlow, env: { AIRLABS_API_KEY: "must-not-appear" } });
     const result = execute("system-health-summary", rt);
     assert.equal(result.payload.radar.aircraftCount, 12);
+    assert.equal(result.payload.radar.authMode, "Authenticated");
+    assert.equal(result.payload.radar.creditsRemaining, 3850);
+    assert.equal(result.payload.radar.estimatedCreditCostPerPoll, 1);
+    assert.equal(result.payload.radar.pollSeconds, 60);
     assert.equal(result.payload.airports.selectedIata, "SFO");
     assert.equal(result.payload.schedules.monthlyRequestsUsed, 24);
     assert.doesNotMatch(JSON.stringify(result), /must-not-appear|api_key|secret/i);
