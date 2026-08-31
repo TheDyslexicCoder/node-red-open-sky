@@ -2,6 +2,7 @@ const https = require("node:https");
 
 const apiKey = String(process.env.AIRLABS_API_KEY || "").trim();
 const airportIata = String(process.env.AIRLABS_TEST_AIRPORT || "MIA").trim().toUpperCase();
+const retainedLimit = 50;
 
 if (!apiKey) {
     console.error("AIRLABS_API_KEY is not set. Configure it in the environment before running this opt-in test.");
@@ -25,7 +26,9 @@ function requestBoard(direction) {
     const airportParam = direction === "departures" ? "dep_iata" : "arr_iata";
     const url = new URL("https://airlabs.co/api/v9/schedules");
     url.searchParams.set(airportParam, airportIata);
-    url.searchParams.set("limit", "1");
+    // AirLabs documents this parameter, but some live v9 responses return a
+    // larger provider page. Report both counts and mirror the flow's local cap.
+    url.searchParams.set("limit", String(retainedLimit));
     url.searchParams.set("_fields", fields);
     url.searchParams.set("api_key", apiKey);
 
@@ -58,7 +61,17 @@ function requestBoard(direction) {
                     reject(new Error(direction + " did not return a documented schedule-list shape."));
                     return;
                 }
-                resolve({ direction, rows: rows.length, sampleFields: rows[0] ? Object.keys(rows[0]).sort() : [] });
+                const requestMeta = parsed && !Array.isArray(parsed) && parsed.request && typeof parsed.request === "object"
+                    ? parsed.request
+                    : {};
+                resolve({
+                    direction,
+                    providerRows: rows.length,
+                    retainedRows: Math.min(rows.length, retainedLimit),
+                    hasMore: Boolean(requestMeta.has_more),
+                    totalItems: Number.isFinite(Number(requestMeta.total_items)) ? Number(requestMeta.total_items) : null,
+                    sampleFields: rows[0] ? Object.keys(rows[0]).sort() : []
+                });
             });
         });
         request.on("timeout", () => request.destroy());
