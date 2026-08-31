@@ -66,6 +66,9 @@ test("flow is structurally complete and every Function node compiles", () => {
     }
     const smokeSource = fs.readFileSync(airlabsSmokeTestPath, "utf8");
     assert.doesNotThrow(() => new Function(smokeSource));
+    assert.match(smokeSource, /const retainedLimit = 50;/);
+    assert.match(smokeSource, /providerRows/);
+    assert.match(smokeSource, /retainedRows/);
     const prepareSource = flowDefinition.find(node => node.id === "airlabs-prepare-requests").func;
     assert.deepEqual(extractRequestedFields(smokeSource), extractRequestedFields(prepareSource));
 });
@@ -251,6 +254,30 @@ test("AirLabs direct-array responses are accepted", () => {
     });
     assert.equal(execute("airlabs-cache-schedules", rt), null);
     assert.equal(sharedFlow.values.airlabsScheduleCache.byFlight.UA100.originIata, "ORD");
+});
+
+test("AirLabs provider pages larger than the configured limit are capped locally", () => {
+    const cfg = { airportIata: "MIA", refreshMinutes: 120, maxRecords: 50, estimatedMonthlyRequests: 720 };
+    const rows = Array.from({ length: 100 }, (_, index) => ({
+        flight_iata: "AA" + String(index + 1),
+        flight_icao: "AAL" + String(index + 1),
+        dep_iata: "MIA",
+        arr_iata: "JFK"
+    }));
+    const sharedFlow = store({ openskyScheduleConfig: cfg });
+    const rt = runtime({
+        flow: sharedFlow,
+        msg: {
+            statusCode: 200,
+            _airlabsDirection: "departures",
+            _airlabsConfig: cfg,
+            payload: { request: { has_more: true, total_items: 562 }, response: rows }
+        }
+    });
+    assert.equal(execute("airlabs-cache-schedules", rt), null);
+    assert.equal(sharedFlow.values.airlabsScheduleCache.boards.departures.length, 50);
+    assert.equal(sharedFlow.values.airlabsScheduleMeta.records, 50);
+    assert.equal(sharedFlow.values.airlabsScheduleCache.byFlight.AA51, undefined);
 });
 
 test("all documented AirLabs API errors become safe actionable Debug messages", () => {
