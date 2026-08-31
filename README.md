@@ -12,6 +12,8 @@ A ready-to-import Node-RED flow that plots nearby aircraft from the OpenSky Netw
 - Displays a cleaner flight card with operator, altitude, speed, distance, category, and last-contact age
 - Refreshes the official FAA company, telephony, and ICAO three-letter-designator directory once per day
 - Keeps an embedded operator list available if the FAA directory cannot be reached or parsed
+- Optionally adds cached Miami airport routes, schedules, status, delays, terminals, and gates from AirLabs
+- Keeps live tracking independent, so missing credentials or a schedule-provider outage cannot stop the radar
 - Shows live aircraft count, refresh time, authentication mode, and remaining API credits
 - Keeps aircraft visible between updates and removes stale markers after a seven-minute grace period
 - Reports API, authentication, rate-limit, and network failures on the map and in Node-RED's Debug sidebar
@@ -23,6 +25,7 @@ A ready-to-import Node-RED flow that plots nearby aircraft from the OpenSky Netw
 - [`node-red-contrib-web-worldmap`](https://flows.nodered.org/node/node-red-contrib-web-worldmap) 5.8.1 or newer
 - Outbound HTTPS access to `opensky-network.org` and, when OAuth is enabled, `auth.opensky-network.org`
 - Outbound HTTPS access to `www.faa.gov` for the optional daily operator-directory refresh
+- Optional outbound HTTPS access to `airlabs.co` for airport schedules
 
 The flow export declares the required worldmap package, but you can also install it from **Menu → Manage palette → Install**.
 
@@ -71,6 +74,34 @@ Do **not** paste a client secret into the function node, the exported JSON, a Gi
 
 OpenSky no longer accepts basic username/password authentication. OAuth2 client credentials are the supported authenticated method; see the official [authentication instructions](https://openskynetwork.github.io/opensky-api/rest.html#authentication).
 
+## Optional Miami schedules with AirLabs
+
+The radar works without AirLabs. When schedule enrichment is enabled, the flow downloads the next Miami departures and arrivals, minimizes the response, and reuses that cache for every matching live aircraft. It does **not** make one schedule request per aircraft.
+
+Create or activate an [AirLabs](https://airlabs.co/) account, then provide the key to the Node-RED process through an environment variable:
+
+```text
+AIRLABS_API_KEY=replace_with_a_new_private_key
+AIRLABS_AIRPORT_IATA=MIA
+```
+
+Never paste an AirLabs key into this JSON, a Function node, GitHub, a Debug message, or a screenshot. Treat any key shared in a chat, issue, or commit as exposed: revoke it and create a replacement before use.
+
+The included free-tier defaults are deliberately conservative:
+
+- The flow checks every 10 minutes but calls AirLabs only when the two-hour guard has elapsed.
+- Each refresh uses two requests: one Miami departure board and one Miami arrival board.
+- A 120-minute refresh interval is approximately **720 requests per 30-day month**.
+- A separate monthly guard stops automatic calls at 900 requests by default, leaving headroom under a stated 1,000-request plan.
+- Each direction is limited to 50 schedule records.
+- Current data is retained between live five-minute OpenSky polls.
+- If AirLabs fails, the last successful schedule may remain visible for up to 12 hours and is clearly marked as cached.
+- The cache is held in Node-RED flow context and does not survive a Node-RED restart unless you configure persistent context storage.
+
+AirLabs currently documents a limited free plan, but quotas, available fields, registration access, and terms can change. Confirm the current [AirLabs schedule documentation](https://airlabs.co/docs/schedules) and account limits before shortening the refresh interval.
+
+Only flights connected to the configured airport can receive these schedule details. Aircraft merely passing over Miami, private aircraft, and flights missing a matching published designator continue to show their OpenSky and FAA information without a guessed schedule.
+
 ## Runtime overrides
 
 For automation, set either `flow.openskyRadarOverride`, `global.openskyRadarOverride`, `msg.config`, or direct message properties:
@@ -91,6 +122,19 @@ Message values have the highest priority. Accepted ranges are:
 
 The final validated values are available at `flow.openskyRadarConfig`. Keeping overrides separate from the effective config means changing the three defaults still works after redeploying.
 
+Optional schedule settings can be overridden with `global.openskyScheduleOverride`, `flow.openskyScheduleOverride`, or `msg.scheduleConfig`:
+
+```json
+{
+  "airportIata": "MIA",
+  "refreshMinutes": 120,
+  "maxRecords": 50,
+  "monthlyRequestCap": 900
+}
+```
+
+Accepted schedule ranges are 15 to 1,440 minutes and 1 to 50 records per direction. Reducing the interval can exceed a free API quota quickly. The monthly counter is stored in `flow.airlabsRequestUsage` and resets when the UTC month changes. The effective settings, minimized cache, and safe status metadata are available at `flow.openskyScheduleConfig`, `flow.airlabsScheduleCache`, and `flow.airlabsScheduleMeta`. No API key is stored in those values.
+
 ## Visual improvements
 
 The updated flow uses a dark-gray basemap, smaller heading-aware aircraft icons, a dashed search-radius overlay, a persistent radar-center marker, hover tooltips, and a compact status legend. Speed remains in the popup but is no longer sent as a worldmap vector, which removes the long red leader lines that made the original map look crowded.
@@ -107,6 +151,11 @@ Aircraft returned in the bounding-box corners are filtered out when they fall ou
 | OAuth warning, anonymous fallback | One or both environment variables are missing or invalid | Verify both variables outside the flow and restart Node-RED |
 | Connection problem dialog | Node-RED could not reach OpenSky | Check DNS, firewall, proxy, and outbound HTTPS from the Node-RED host |
 | Map opens at the wrong place | The flow was not redeployed or another override is active | Check the effective `flow.openskyRadarConfig` value |
+| AirLabs disabled • no key | Optional schedule enrichment is not configured | Set a new `AIRLABS_API_KEY` outside the flow and restart Node-RED |
+| AirLabs schedule error | The key is inactive, waitlisted, invalid, rate-limited, or the response changed | Check `flow.airlabsScheduleMeta` and the Debug sidebar without exposing the key |
+| AirLabs monthly request guard reached | The configured safety cap has been reached | Wait for the next UTC month or deliberately raise `monthlyRequestCap` after checking the account quota |
+| AirLabs unavailable • cached schedules active | A refresh failed, but the previous minimized response is still within its 12-hour stale window | Live OpenSky tracking continues; check the provider later |
+| Aircraft has no route or schedule | It does not match the configured airport board or published flight designator | This is expected for pass-through, private, and unmatched flights |
 
 ## Data notes
 
@@ -116,7 +165,19 @@ The live state-vector response does not include an operator-name field. On start
 
 Registration-style callsigns, such as a U.S. `N` number, are labeled **Private / general aviation** because a registration identifies an aircraft, not necessarily its current operator. Custom corrections can be supplied with a `global.openskyOperatorOverrides` object such as `{ "XYZ": "Example Aviation" }`; these always take priority over the FAA and fallback values.
 
-Review OpenSky's [API documentation and terms](https://openskynetwork.github.io/opensky-api/) and the FAA source before using the data beyond a personal or educational project.
+AirLabs schedule information is optional third-party data and may be incomplete, delayed, or unavailable. Scheduled and estimated times shown in the popup are the local times returned for their respective airports. The popup identifies AirLabs as the source and shows the cache age; stale data is never presented as live.
+
+Review OpenSky's [API documentation and terms](https://openskynetwork.github.io/opensky-api/), the FAA source, and the current AirLabs plan terms before using the data beyond a personal or educational project.
+
+## Validation tests
+
+The repository includes dependency-free tests for node wiring, Function-node syntax, disabled-provider behavior, the two-request guard, schedule minimization, secret removal, cache matching, and stale-data expiry:
+
+```bash
+npm test
+```
+
+The tests use fictional schedule responses and a test-only credential string. They never require or contact AirLabs.
 
 ## License
 
