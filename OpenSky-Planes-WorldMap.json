@@ -131,6 +131,140 @@
         ]
     },
     {
+        "id": "note-airlabs",
+        "type": "comment",
+        "z": "79536b1f3c9bef45",
+        "name": "2. Optional: cached Miami schedules from AirLabs",
+        "info": "Set AIRLABS_API_KEY outside this flow. Defaults to MIA and refreshes departures + arrivals every 120 minutes. No key means this branch stays disabled.",
+        "x": 310,
+        "y": 520,
+        "wires": []
+    },
+    {
+        "id": "airlabs-schedule-tick",
+        "type": "inject",
+        "z": "79536b1f3c9bef45",
+        "name": "Check whether schedules need refresh",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "600",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 5,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 210,
+        "y": 580,
+        "wires": [
+            [
+                "airlabs-prepare-requests"
+            ]
+        ]
+    },
+    {
+        "id": "airlabs-prepare-requests",
+        "type": "function",
+        "z": "79536b1f3c9bef45",
+        "name": "Prepare safe schedule requests",
+        "func": "// Optional AirLabs schedule enrichment. The radar remains independent.\n// Defaults are deliberately conservative for a 1,000-request monthly free tier.\nconst defaults = { airportIata: \"MIA\", refreshMinutes: 120, maxRecords: 50, monthlyRequestCap: 900 };\n\nfunction finiteNumber(value, fallback) {\n    const parsed = Number(value);\n    return Number.isFinite(parsed) ? parsed : fallback;\n}\n\nfunction applyOverride(target, source) {\n    if (!source || typeof source !== \"object\") return;\n    if (source.airportIata != null) target.airportIata = String(source.airportIata).trim().toUpperCase();\n    target.refreshMinutes = finiteNumber(source.refreshMinutes, target.refreshMinutes);\n    target.maxRecords = finiteNumber(source.maxRecords, target.maxRecords);\n    target.monthlyRequestCap = finiteNumber(source.monthlyRequestCap, target.monthlyRequestCap);\n}\n\nconst cfg = Object.assign({}, defaults);\napplyOverride(cfg, global.get(\"openskyScheduleOverride\"));\napplyOverride(cfg, flow.get(\"openskyScheduleOverride\"));\napplyOverride(cfg, msg.scheduleConfig);\n\nconst envAirport = env.get(\"AIRLABS_AIRPORT_IATA\");\nif (envAirport) cfg.airportIata = String(envAirport).trim().toUpperCase();\nif (!/^[A-Z0-9]{3}$/.test(cfg.airportIata)) {\n    node.error(\"AirLabs airport must be a three-character IATA code.\");\n    return null;\n}\nif (cfg.refreshMinutes < 15 || cfg.refreshMinutes > 1440) {\n    node.error(\"AirLabs refreshMinutes must be between 15 and 1440.\");\n    return null;\n}\ncfg.maxRecords = Math.max(1, Math.min(50, Math.round(cfg.maxRecords)));\ncfg.monthlyRequestCap = Math.max(2, Math.min(100000, Math.round(cfg.monthlyRequestCap)));\ncfg.estimatedMonthlyRequests = Math.ceil(43200 / cfg.refreshMinutes) * 2;\nflow.set(\"openskyScheduleConfig\", cfg);\n\nconst apiKey = env.get(\"AIRLABS_API_KEY\");\nif (!apiKey) {\n    flow.set(\"airlabsScheduleMeta\", {\n        enabled: false,\n        airportIata: cfg.airportIata,\n        message: \"Set AIRLABS_API_KEY to enable optional schedules.\"\n    });\n    node.status({ fill: \"grey\", shape: \"ring\", text: \"AirLabs disabled • no key\" });\n    return null;\n}\n\nconst now = Date.now();\nconst lastRequestAt = Number(flow.get(\"airlabsLastRequestAt\") || 0);\nif (now - lastRequestAt < cfg.refreshMinutes * 60000) return null;\n\nconst month = new Date(now).toISOString().slice(0, 7);\nlet usage = flow.get(\"airlabsRequestUsage\") || {};\nif (usage.month !== month) usage = { month, count: 0 };\nif (usage.count + 2 > cfg.monthlyRequestCap) {\n    const meta = flow.get(\"airlabsScheduleMeta\") || {};\n    meta.quotaGuardActive = true;\n    meta.monthlyRequestsUsed = usage.count;\n    meta.monthlyRequestCap = cfg.monthlyRequestCap;\n    flow.set(\"airlabsScheduleMeta\", meta);\n    node.status({ fill: \"yellow\", shape: \"ring\", text: \"AirLabs monthly request guard reached\" });\n    return null;\n}\nusage.count += 2;\nflow.set(\"airlabsRequestUsage\", usage);\nflow.set(\"airlabsLastRequestAt\", now);\n\nconst fields = [\n    \"flight_icao\", \"flight_iata\", \"flight_number\", \"airline_icao\", \"airline_iata\",\n    \"cs_flight_icao\", \"cs_flight_iata\", \"dep_iata\", \"dep_icao\", \"dep_terminal\", \"dep_gate\",\n    \"dep_time\", \"dep_estimated\", \"dep_actual\", \"dep_delayed\", \"arr_iata\", \"arr_icao\",\n    \"arr_terminal\", \"arr_gate\", \"arr_baggage\", \"arr_time\", \"arr_estimated\", \"arr_actual\",\n    \"arr_delayed\", \"status\", \"updated\"\n].join(\",\");\nconst baseUrl = \"https://airlabs.co/api/v9/schedules\";\nconst batchId = now.toString(36);\n\nfunction request(direction) {\n    const airportParam = direction === \"departures\" ? \"dep_iata\" : \"arr_iata\";\n    return {\n        url: baseUrl + \"?\" + airportParam + \"=\" + encodeURIComponent(cfg.airportIata) +\n            \"&limit=\" + cfg.maxRecords + \"&_fields=\" + encodeURIComponent(fields) +\n            \"&api_key=\" + encodeURIComponent(apiKey),\n        payload: \"\",\n        _airlabsDirection: direction,\n        _airlabsBatchId: batchId,\n        _airlabsConfig: cfg\n    };\n}\n\nflow.set(\"airlabsScheduleMeta\", {\n    enabled: true,\n    airportIata: cfg.airportIata,\n    requestedAt: new Date(now).toISOString(),\n    estimatedMonthlyRequests: cfg.estimatedMonthlyRequests,\n    monthlyRequestsUsed: usage.count,\n    monthlyRequestCap: cfg.monthlyRequestCap,\n    quotaGuardActive: false\n});\nnode.status({ fill: \"blue\", shape: \"ring\", text: \"refreshing \" + cfg.airportIata + \" schedules\" });\nreturn [[request(\"departures\"), request(\"arrivals\")]];",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 520,
+        "y": 580,
+        "wires": [
+            [
+                "airlabs-schedule-http"
+            ]
+        ]
+    },
+    {
+        "id": "airlabs-schedule-http",
+        "type": "http request",
+        "z": "79536b1f3c9bef45",
+        "name": "Get AirLabs airport schedules",
+        "method": "GET",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "authType": "",
+        "senderr": false,
+        "x": 810,
+        "y": 580,
+        "wires": [
+            [
+                "airlabs-cache-schedules"
+            ]
+        ]
+    },
+    {
+        "id": "airlabs-cache-schedules",
+        "type": "function",
+        "z": "79536b1f3c9bef45",
+        "name": "Validate, minimize & cache schedules",
+        "func": "// Keep only display fields. Never store or emit the request URL/API key.\nconst status = Number(msg.statusCode || 0);\nconst direction = msg._airlabsDirection === \"arrivals\" ? \"arrivals\" : \"departures\";\nconst cfg = msg._airlabsConfig || flow.get(\"openskyScheduleConfig\") || {\n    airportIata: \"MIA\", refreshMinutes: 120, maxRecords: 50\n};\ndelete msg.url;\ndelete msg.headers;\n\nfunction safeFailure(detail) {\n    const prior = flow.get(\"airlabsScheduleCache\") || {};\n    const meta = flow.get(\"airlabsScheduleMeta\") || {};\n    meta.lastErrorAt = new Date().toISOString();\n    meta.lastError = detail;\n    meta.usingStaleCache = Boolean(prior.staleUntil && prior.staleUntil > Date.now());\n    flow.set(\"airlabsScheduleMeta\", meta);\n    node.status({\n        fill: \"yellow\", shape: \"ring\",\n        text: meta.usingStaleCache ? \"AirLabs unavailable • cached schedules active\" : \"AirLabs schedule error\"\n    });\n    return { payload: { source: \"AirLabs schedules\", message: detail, cachedDataActive: meta.usingStaleCache } };\n}\n\nif (status < 200 || status >= 300) {\n    return safeFailure(\"AirLabs returned HTTP \" + (status || \"unknown\") + \".\");\n}\nconst body = msg.payload && typeof msg.payload === \"object\" ? msg.payload : {};\nconst rows = Array.isArray(body.response) ? body.response : (Array.isArray(body) ? body : null);\nif (!rows) return safeFailure(\"AirLabs response did not contain a schedule list.\");\n\nfunction text(value) {\n    return value == null ? \"\" : String(value).trim();\n}\nfunction upper(value) {\n    return text(value).toUpperCase();\n}\nfunction finite(value) {\n    const parsed = Number(value);\n    return Number.isFinite(parsed) ? parsed : null;\n}\n\nconst minimized = rows.slice(0, Number(cfg.maxRecords || 50)).map(row => ({\n    flightIcao: upper(row.flight_icao),\n    flightIata: upper(row.flight_iata),\n    codeshareFlightIcao: upper(row.cs_flight_icao),\n    codeshareFlightIata: upper(row.cs_flight_iata),\n    flightNumber: text(row.flight_number),\n    airlineIcao: upper(row.airline_icao),\n    airlineIata: upper(row.airline_iata),\n    originIata: upper(row.dep_iata),\n    originIcao: upper(row.dep_icao),\n    destinationIata: upper(row.arr_iata),\n    destinationIcao: upper(row.arr_icao),\n    departureTerminal: text(row.dep_terminal),\n    departureGate: text(row.dep_gate),\n    departureScheduled: text(row.dep_time),\n    departureEstimated: text(row.dep_estimated),\n    departureActual: text(row.dep_actual),\n    departureDelayMinutes: finite(row.dep_delayed),\n    arrivalTerminal: text(row.arr_terminal),\n    arrivalGate: text(row.arr_gate),\n    arrivalBaggage: text(row.arr_baggage),\n    arrivalScheduled: text(row.arr_time),\n    arrivalEstimated: text(row.arr_estimated),\n    arrivalActual: text(row.arr_actual),\n    arrivalDelayMinutes: finite(row.arr_delayed),\n    status: text(row.status).toLowerCase(),\n    providerUpdated: text(row.updated),\n    boardDirection: direction\n})).filter(row => row.flightIcao || row.flightIata);\n\nconst previous = flow.get(\"airlabsScheduleCache\") || {};\nconst boards = previous.boards && typeof previous.boards === \"object\" ? previous.boards : {};\nboards[direction] = minimized;\nconst byFlight = {};\nObject.keys(boards).forEach(key => {\n    (boards[key] || []).forEach(record => {\n        [record.flightIcao, record.flightIata, record.codeshareFlightIcao, record.codeshareFlightIata]\n            .filter(Boolean)\n            .forEach(code => { byFlight[code] = record; });\n    });\n});\n\nconst now = Date.now();\nconst requestUsage = flow.get(\"airlabsRequestUsage\") || {};\nconst cache = {\n    airportIata: cfg.airportIata,\n    boards,\n    byFlight,\n    fetchedAt: now,\n    expiresAt: now + Number(cfg.refreshMinutes || 120) * 60000 + 15 * 60000,\n    staleUntil: now + 12 * 60 * 60000\n};\nflow.set(\"airlabsScheduleCache\", cache);\nflow.set(\"airlabsScheduleMeta\", {\n    enabled: true,\n    airportIata: cfg.airportIata,\n    updatedAt: new Date(now).toISOString(),\n    records: Object.keys(byFlight).length,\n    estimatedMonthlyRequests: cfg.estimatedMonthlyRequests,\n    monthlyRequestsUsed: Number(requestUsage.count || 0),\n    monthlyRequestCap: Number(cfg.monthlyRequestCap || 900),\n    quotaGuardActive: false,\n    usingStaleCache: false\n});\nnode.status({ fill: \"green\", shape: \"dot\", text: Object.keys(byFlight).length + \" schedule keys cached\" });\nreturn null;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1110,
+        "y": 580,
+        "wires": [
+            [
+                "debug-errors"
+            ]
+        ]
+    },
+    {
+        "id": "airlabs-schedule-catch",
+        "type": "catch",
+        "z": "79536b1f3c9bef45",
+        "name": "Catch AirLabs schedule errors",
+        "scope": [
+            "airlabs-schedule-http"
+        ],
+        "uncaught": false,
+        "x": 810,
+        "y": 640,
+        "wires": [
+            [
+                "airlabs-safe-error"
+            ]
+        ]
+    },
+    {
+        "id": "airlabs-safe-error",
+        "type": "function",
+        "z": "79536b1f3c9bef45",
+        "name": "Protect key & retain cached schedules",
+        "func": "// Do not forward the failed request message because msg.url contains the API key.\nconst prior = flow.get(\"airlabsScheduleCache\") || {};\nconst cachedDataActive = Boolean(prior.staleUntil && prior.staleUntil > Date.now());\nconst meta = flow.get(\"airlabsScheduleMeta\") || {};\nmeta.lastErrorAt = new Date().toISOString();\nmeta.lastError = \"The AirLabs request could not be completed.\";\nmeta.usingStaleCache = cachedDataActive;\nflow.set(\"airlabsScheduleMeta\", meta);\nnode.status({\n    fill: \"yellow\", shape: \"ring\",\n    text: cachedDataActive ? \"AirLabs unavailable • cached schedules active\" : \"AirLabs connection error\"\n});\nreturn { payload: {\n    source: \"AirLabs schedules\",\n    message: \"The schedule request could not be completed.\",\n    cachedDataActive\n} };",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1110,
+        "y": 640,
+        "wires": [
+            [
+                "debug-errors"
+            ]
+        ]
+    },
+    {
         "id": "6da2dc22d53c3f29",
         "type": "inject",
         "z": "79536b1f3c9bef45",
@@ -285,8 +419,8 @@
         "id": "operator-label-resolver",
         "type": "function",
         "z": "79536b1f3c9bef45",
-        "name": "Resolve operator from FAA",
-        "func": "// OpenSky broadcasts a callsign, not an operator name.\n// Prefer the daily FAA directory; retain friendly names only for FAA-confirmed codes.\n// Custom global.openskyOperatorOverrides values always win.\nconst operatorByIcao = {\n    AAL: \"American Airlines\", AAY: \"Allegiant Air\", ACA: \"Air Canada\",\n    AEA: \"Air Europa\", AFR: \"Air France\", AIC: \"Air India\",\n    AMX: \"Aeromexico\", ANA: \"All Nippon Airways\", ANZ: \"Air New Zealand\",\n    ARG: \"Aerolineas Argentinas\", ASA: \"Alaska Airlines\", AVA: \"Avianca\",\n    AZU: \"Azul Brazilian Airlines\", BAW: \"British Airways\", BHS: \"Bahamasair\",\n    CAL: \"China Airlines\", CAY: \"Cayman Airways\", CLX: \"Cargolux\",\n    CMP: \"Copa Airlines\", CPA: \"Cathay Pacific\", DAL: \"Delta Air Lines\",\n    DLH: \"Lufthansa\", EIN: \"Aer Lingus\", EJA: \"NetJets Aviation\",\n    ENY: \"Envoy Air\", ETH: \"Ethiopian Airlines\", EWG: \"Eurowings\",\n    EZY: \"easyJet\", FDX: \"FedEx Express\", FFT: \"Frontier Airlines\",\n    FIN: \"Finnair\", GEC: \"Lufthansa Cargo\", GTI: \"Atlas Air\",\n    IBE: \"Iberia\", IBS: \"Iberia Express\", ICE: \"Icelandair\",\n    JAL: \"Japan Airlines\", JBU: \"JetBlue Airways\", KAL: \"Korean Air\",\n    KLM: \"KLM\", KPO: \"Fly Alliance\", LAN: \"LATAM Airlines Chile\",\n    LNE: \"LATAM Airlines Ecuador\", MAS: \"Malaysia Airlines\",\n    MVP: \"Premier Private Jets\", NKS: \"Spirit Airlines\", QTR: \"Qatar Airways\",\n    RAM: \"Royal Air Maroc\", ROU: \"Air Canada Rouge\", RYR: \"Ryanair\",\n    SAS: \"Scandinavian Airlines\", SIA: \"Singapore Airlines\", SKW: \"SkyWest Airlines\",\n    SWA: \"Southwest Airlines\", SWR: \"Swiss International Air Lines\",\n    TAM: \"LATAM Airlines Brasil\", TAP: \"TAP Air Portugal\", THY: \"Turkish Airlines\",\n    TSC: \"Air Transat\", UAE: \"Emirates\", UAL: \"United Airlines\",\n    UPS: \"UPS Airlines\", VIR: \"Virgin Atlantic\", VJA: \"Vista America\",\n    VJS: \"VistaJet\", VLG: \"Vueling\", VOI: \"Volaris\", WJA: \"WestJet\",\n    WZZ: \"Wizz Air\"\n};\n\nfunction escapeHtml(value) {\n    return String(value == null ? \"\" : value)\n        .replace(/&/g, \"&amp;\")\n        .replace(/</g, \"&lt;\")\n        .replace(/>/g, \"&gt;\")\n        .replace(/\\\"/g, \"&quot;\")\n        .replace(/'/g, \"&#39;\");\n}\n\nconst marker = msg.payload;\nif (!marker || typeof marker !== \"object\" || typeof marker.popup !== \"string\") return msg;\n\nconst nameParts = String(marker.name || \"\").split(\" · \");\nconst label = String(nameParts[0] || \"\").trim().toUpperCase();\nconst icaoLabel = String(nameParts[1] || \"\").trim().toUpperCase();\nconst callsignMissing = /^[A-F0-9]{6}$/.test(label) && label === icaoLabel;\nconst prefixMatch = callsignMissing ? null : label.match(/^[A-Z]{3}/);\nconst prefix = prefixMatch ? prefixMatch[0] : \"\";\nconst custom = global.get(\"openskyOperatorOverrides\") || {};\nconst faaDirectory = flow.get(\"faaOperatorDirectory\") || {};\nconst hasFaaDirectory = Object.keys(faaDirectory).length >= 1000;\nconst faaEntry = prefix && faaDirectory[prefix] ? faaDirectory[prefix] : null;\nconst confirmedFriendlyName = faaEntry && operatorByIcao[prefix] ? operatorByIcao[prefix] : \"\";\nlet operator = custom[prefix] || confirmedFriendlyName || (faaEntry && faaEntry.company) ||\n    (!hasFaaDirectory ? operatorByIcao[prefix] : \"\");\n\n// A registration-style callsign identifies the aircraft, but not necessarily\n// its owner or operator. Keep that distinction clear rather than guessing.\nif (!operator && /^N[1-9][0-9]{0,4}[A-Z]{0,2}$/.test(label)) {\n    operator = \"Private / general aviation\";\n} else if (!operator && callsignMissing) {\n    operator = \"Callsign not broadcast\";\n} else if (!operator && prefix) {\n    operator = \"ICAO operator code \" + prefix;\n} else if (!operator) {\n    operator = \"Not available from live signal\";\n}\n\nconst operatorPattern = /(<span style='color:#64748b'>Operator<\\/span><b style='color:#0f172a'>)[^<]*(<\\/b>)/;\nconst operatorMatch = marker.popup.match(operatorPattern);\nif (operatorMatch) {\n    let operatorRows = operatorMatch[1] + escapeHtml(operator) + operatorMatch[2];\n    if (faaEntry && faaEntry.telephony) {\n        operatorRows += \"<div style='display:grid;grid-template-columns:92px 1fr;gap:8px;padding:5px 0;border-top:1px solid #e2e8f0'>\" +\n            \"<span style='color:#64748b'>Radio callsign</span><b style='color:#0f172a'>\" +\n            escapeHtml(faaEntry.telephony) + \"</b></div>\";\n    }\n    marker.popup = marker.popup.replace(operatorMatch[0], operatorRows);\n}\nreturn msg;",
+        "name": "Resolve operator, route & schedule",
+        "func": "// Enrich a live OpenSky marker without blocking the radar.\n// Operator data comes from FAA; optional schedule data comes from the shared AirLabs cache.\n// Custom global.openskyOperatorOverrides values always win.\nconst operatorByIcao = {\n    AAL: \"American Airlines\", AAY: \"Allegiant Air\", ACA: \"Air Canada\",\n    AEA: \"Air Europa\", AFR: \"Air France\", AIC: \"Air India\",\n    AMX: \"Aeromexico\", ANA: \"All Nippon Airways\", ANZ: \"Air New Zealand\",\n    ARG: \"Aerolineas Argentinas\", ASA: \"Alaska Airlines\", AVA: \"Avianca\",\n    AZU: \"Azul Brazilian Airlines\", BAW: \"British Airways\", BHS: \"Bahamasair\",\n    CAL: \"China Airlines\", CAY: \"Cayman Airways\", CLX: \"Cargolux\",\n    CMP: \"Copa Airlines\", CPA: \"Cathay Pacific\", DAL: \"Delta Air Lines\",\n    DLH: \"Lufthansa\", EIN: \"Aer Lingus\", EJA: \"NetJets Aviation\",\n    ENY: \"Envoy Air\", ETH: \"Ethiopian Airlines\", EWG: \"Eurowings\",\n    EZY: \"easyJet\", FDX: \"FedEx Express\", FFT: \"Frontier Airlines\",\n    FIN: \"Finnair\", GEC: \"Lufthansa Cargo\", GTI: \"Atlas Air\",\n    IBE: \"Iberia\", IBS: \"Iberia Express\", ICE: \"Icelandair\",\n    JAL: \"Japan Airlines\", JBU: \"JetBlue Airways\", KAL: \"Korean Air\",\n    KLM: \"KLM\", KPO: \"Fly Alliance\", LAN: \"LATAM Airlines Chile\",\n    LNE: \"LATAM Airlines Ecuador\", MAS: \"Malaysia Airlines\",\n    MVP: \"Premier Private Jets\", NKS: \"Spirit Airlines\", QTR: \"Qatar Airways\",\n    RAM: \"Royal Air Maroc\", ROU: \"Air Canada Rouge\", RYR: \"Ryanair\",\n    SAS: \"Scandinavian Airlines\", SIA: \"Singapore Airlines\", SKW: \"SkyWest Airlines\",\n    SWA: \"Southwest Airlines\", SWR: \"Swiss International Air Lines\",\n    TAM: \"LATAM Airlines Brasil\", TAP: \"TAP Air Portugal\", THY: \"Turkish Airlines\",\n    TSC: \"Air Transat\", UAE: \"Emirates\", UAL: \"United Airlines\",\n    UPS: \"UPS Airlines\", VIR: \"Virgin Atlantic\", VJA: \"Vista America\",\n    VJS: \"VistaJet\", VLG: \"Vueling\", VOI: \"Volaris\", WJA: \"WestJet\",\n    WZZ: \"Wizz Air\"\n};\nconst iataByIcao = {\n    AAL: \"AA\", AAY: \"G4\", ACA: \"AC\", AEA: \"UX\", AFR: \"AF\", AIC: \"AI\",\n    AMX: \"AM\", ANA: \"NH\", ANZ: \"NZ\", ARG: \"AR\", ASA: \"AS\", AVA: \"AV\",\n    AZU: \"AD\", BAW: \"BA\", BHS: \"UP\", CAL: \"CI\", CAY: \"KX\", CLX: \"CV\",\n    CMP: \"CM\", CPA: \"CX\", DAL: \"DL\", DLH: \"LH\", EIN: \"EI\", ENY: \"MQ\",\n    ETH: \"ET\", EWG: \"EW\", EZY: \"U2\", FDX: \"FX\", FFT: \"F9\", FIN: \"AY\",\n    GTI: \"5Y\", IBE: \"IB\", JAL: \"JL\", JBU: \"B6\", KAL: \"KE\", KLM: \"KL\",\n    NKS: \"NK\", QTR: \"QR\", RAM: \"AT\", ROU: \"RV\", RYR: \"FR\", SAS: \"SK\",\n    SIA: \"SQ\", SWA: \"WN\", SWR: \"LX\", TAP: \"TP\", THY: \"TK\", TSC: \"TS\",\n    UAE: \"EK\", UAL: \"UA\", UPS: \"5X\", VIR: \"VS\", VLG: \"VY\", VOI: \"Y4\",\n    WJA: \"WS\", WZZ: \"W6\"\n};\n\nfunction escapeHtml(value) {\n    return String(value == null ? \"\" : value)\n        .replace(/&/g, \"&amp;\")\n        .replace(/</g, \"&lt;\")\n        .replace(/>/g, \"&gt;\")\n        .replace(/\"/g, \"&quot;\")\n        .replace(/'/g, \"&#39;\");\n}\nfunction popupRow(label, value) {\n    return \"<div style='display:grid;grid-template-columns:92px 1fr;gap:8px;padding:5px 0;border-top:1px solid #e2e8f0'>\" +\n        \"<span style='color:#64748b'>\" + escapeHtml(label) + \"</span><b style='color:#0f172a'>\" +\n        escapeHtml(value) + \"</b></div>\";\n}\nfunction shortTime(value) {\n    const text = String(value || \"\").trim();\n    const match = text.match(/(\\d{2}:\\d{2})(?::\\d{2})?$/);\n    return match ? match[1] : text;\n}\n\nconst marker = msg.payload;\nif (!marker || typeof marker !== \"object\" || typeof marker.popup !== \"string\") return msg;\n\nconst nameParts = String(marker.name || \"\").split(\" · \");\nconst label = String(nameParts[0] || \"\").trim().toUpperCase();\nconst icaoLabel = String(nameParts[1] || \"\").trim().toUpperCase();\nconst callsignMissing = /^[A-F0-9]{6}$/.test(label) && label === icaoLabel;\nconst prefixMatch = callsignMissing ? null : label.match(/^[A-Z]{3}/);\nconst prefix = prefixMatch ? prefixMatch[0] : \"\";\nconst custom = global.get(\"openskyOperatorOverrides\") || {};\nconst faaDirectory = flow.get(\"faaOperatorDirectory\") || {};\nconst hasFaaDirectory = Object.keys(faaDirectory).length >= 1000;\nconst faaEntry = prefix && faaDirectory[prefix] ? faaDirectory[prefix] : null;\nconst confirmedFriendlyName = faaEntry && operatorByIcao[prefix] ? operatorByIcao[prefix] : \"\";\nlet operator = custom[prefix] || confirmedFriendlyName || (faaEntry && faaEntry.company) ||\n    (!hasFaaDirectory ? operatorByIcao[prefix] : \"\");\n\nif (!operator && /^N[1-9][0-9]{0,4}[A-Z]{0,2}$/.test(label)) {\n    operator = \"Private / general aviation\";\n} else if (!operator && callsignMissing) {\n    operator = \"Callsign not broadcast\";\n} else if (!operator && prefix) {\n    operator = \"ICAO operator code \" + prefix;\n} else if (!operator) {\n    operator = \"Not available from live signal\";\n}\n\nconst operatorPattern = /(<span style='color:#64748b'>Operator<\\/span><b style='color:#0f172a'>)[^<]*(<\\/b>)/;\nconst operatorMatch = marker.popup.match(operatorPattern);\nif (operatorMatch) {\n    let operatorRows = operatorMatch[1] + escapeHtml(operator) + operatorMatch[2];\n    if (faaEntry && faaEntry.telephony) operatorRows += popupRow(\"Radio callsign\", faaEntry.telephony);\n    marker.popup = marker.popup.replace(operatorMatch[0], operatorRows);\n}\n\nconst scheduleCache = flow.get(\"airlabsScheduleCache\") || {};\nconst cacheUsable = scheduleCache.staleUntil && scheduleCache.staleUntil > Date.now();\nif (cacheUsable && scheduleCache.byFlight) {\n    const flightNumber = prefix ? label.slice(prefix.length) : \"\";\n    const iataCandidate = prefix && iataByIcao[prefix] && flightNumber ? iataByIcao[prefix] + flightNumber : \"\";\n    const schedule = scheduleCache.byFlight[label] || (iataCandidate && scheduleCache.byFlight[iataCandidate]);\n    if (schedule) {\n        let scheduleRows = \"\";\n        if (schedule.originIata && schedule.destinationIata) {\n            scheduleRows += popupRow(\"Route\", schedule.originIata + \" → \" + schedule.destinationIata);\n        }\n        if (schedule.status) scheduleRows += popupRow(\"Flight status\", schedule.status.replace(/(^|_)([a-z])/g, (m, space, letter) => (space ? \" \" : \"\") + letter.toUpperCase()));\n        const depTime = shortTime(schedule.departureActual || schedule.departureEstimated || schedule.departureScheduled);\n        const arrTime = shortTime(schedule.arrivalActual || schedule.arrivalEstimated || schedule.arrivalScheduled);\n        if (depTime || arrTime) scheduleRows += popupRow(\"Schedule\", (depTime || \"—\") + \" → \" + (arrTime || \"—\") + \" local\");\n        const delay = schedule.arrivalDelayMinutes != null ? schedule.arrivalDelayMinutes : schedule.departureDelayMinutes;\n        if (delay != null && delay > 0) scheduleRows += popupRow(\"Delay\", Math.round(delay) + \" min\");\n        const terminalGate = [schedule.arrivalTerminal && \"Terminal \" + schedule.arrivalTerminal, schedule.arrivalGate && \"Gate \" + schedule.arrivalGate].filter(Boolean).join(\" • \");\n        if (terminalGate) scheduleRows += popupRow(\"Arrival\", terminalGate);\n        const ageMinutes = Math.max(0, Math.round((Date.now() - Number(scheduleCache.fetchedAt || Date.now())) / 60000));\n        const cacheLabel = Date.now() > scheduleCache.expiresAt ? \"AirLabs cached • \" + ageMinutes + \" min old\" : \"AirLabs • \" + ageMinutes + \" min old\";\n        scheduleRows += popupRow(\"Schedule source\", cacheLabel);\n        marker.popup = marker.popup.replace(/<\\/div>$/, scheduleRows + \"</div>\");\n    }\n}\nreturn msg;",
         "outputs": 1,
         "timeout": "",
         "noerr": 0,
@@ -387,7 +521,7 @@
         "id": "debug-errors",
         "type": "debug",
         "z": "79536b1f3c9bef45",
-        "name": "OpenSky errors only",
+        "name": "Radar and enrichment errors",
         "active": true,
         "tosidebar": true,
         "console": false,
