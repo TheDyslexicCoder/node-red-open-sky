@@ -4,7 +4,8 @@
         "type": "tab",
         "label": "OpenSky Nearby Planes Radar",
         "disabled": false,
-        "info": "Live nearby aircraft with anonymous or environment-based OAuth access."
+        "info": "Live nearby aircraft with anonymous or environment-based OAuth access.\n\nAirLabs setup in the Node-RED editor: double-click this flow tab, open Environment Variables, click Add, name it AIRLABS_API_KEY, enter the private value, click Done, and Deploy. Never include the populated key when exporting or publishing the flow.\n\nTo change OpenSky polling, add OPENSKY_POLL_SECONDS here and set the same interval on the Poll every 5 min Inject node.",
+        "env": []
     },
     {
         "id": "note-location",
@@ -403,7 +404,7 @@
         "type": "function",
         "z": "79536b1f3c9bef45",
         "name": "Prepare location, auth & request",
-        "func": "// OpenSky request, location, and secret-safe OAuth configuration.\n// Edit only these three defaults for your location.\nconst defaultCenterLat = 25.7617;\nconst defaultCenterLon = -80.1918;\nconst defaultRadiusKm = 150;\n\nfunction finiteNumber(value, fallback) {\n    const parsed = Number(value);\n    return Number.isFinite(parsed) ? parsed : fallback;\n}\n\nlet cfg = {\n    centerLat: defaultCenterLat,\n    centerLon: defaultCenterLon,\n    radiusKm: defaultRadiusKm\n};\n\n// Optional runtime overrides. The effective config is stored separately in\n// flow.openskyRadarConfig so changing the defaults above still takes effect.\nfunction applyOverride(source) {\n    if (!source || typeof source !== \"object\") return;\n    cfg.centerLat = finiteNumber(source.centerLat, cfg.centerLat);\n    cfg.centerLon = finiteNumber(source.centerLon, cfg.centerLon);\n    cfg.radiusKm = finiteNumber(source.radiusKm, cfg.radiusKm);\n}\n\napplyOverride(global.get(\"openskyRadarOverride\"));\napplyOverride(flow.get(\"openskyRadarOverride\"));\napplyOverride(msg.config);\napplyOverride(msg);\n\nif (cfg.centerLat < -90 || cfg.centerLat > 90) {\n    node.error(\"centerLat must be between -90 and 90\", msg);\n    return null;\n}\nif (cfg.centerLon < -180 || cfg.centerLon > 180) {\n    node.error(\"centerLon must be between -180 and 180\", msg);\n    return null;\n}\nif (cfg.radiusKm < 1 || cfg.radiusKm > 500) {\n    node.error(\"radiusKm must be between 1 and 500 km\", msg);\n    return null;\n}\n\nconst dLat = cfg.radiusKm / 111;\nconst safeCos = Math.max(Math.abs(Math.cos(cfg.centerLat * Math.PI / 180)), 0.05);\nconst dLon = cfg.radiusKm / (111 * safeCos);\nconst bounds = {\n    lamin: Math.max(-90, cfg.centerLat - dLat),\n    lamax: Math.min(90, cfg.centerLat + dLat),\n    lomin: Math.max(-180, cfg.centerLon - dLon),\n    lomax: Math.min(180, cfg.centerLon + dLon)\n};\n\nconst areaSqDeg = (bounds.lamax - bounds.lamin) * (bounds.lomax - bounds.lomin);\nconst estimatedCreditCost = areaSqDeg <= 25 ? 1 : areaSqDeg <= 100 ? 2 : areaSqDeg <= 400 ? 3 : 4;\n\nconst clientId = env.get(\"OPENSKY_CLIENT_ID\");\nconst clientSecret = env.get(\"OPENSKY_CLIENT_SECRET\");\nconst authConfigured = Boolean(clientId && clientSecret);\n\ncfg = Object.assign(cfg, bounds, {\n    estimatedCreditCost,\n    authConfigured,\n    pollSeconds: 300\n});\nflow.set(\"openskyRadarConfig\", cfg);\n\nconst dataUrl = \"https://opensky-network.org/api/states/all\" +\n    \"?lamin=\" + bounds.lamin.toFixed(5) +\n    \"&lamax=\" + bounds.lamax.toFixed(5) +\n    \"&lomin=\" + bounds.lomin.toFixed(5) +\n    \"&lomax=\" + bounds.lomax.toFixed(5) +\n    \"&extended=1\";\n\nmsg.url = dataUrl;\nmsg.centerLat = cfg.centerLat;\nmsg.centerLon = cfg.centerLon;\nmsg.radiusKm = cfg.radiusKm;\nmsg.openskyConfig = cfg;\n\nconst mapKey = [cfg.centerLat, cfg.centerLon, cfg.radiusKm].join(\":\");\nlet mapMessage = null;\nif (context.get(\"lastMapKey\") !== mapKey) {\n    context.set(\"lastMapKey\", mapKey);\n    mapMessage = { openskyConfig: cfg, _mapInit: true };\n}\n\nif (!authConfigured) {\n    if ((clientId && !clientSecret) || (!clientId && clientSecret)) {\n        node.warn(\"Both OPENSKY_CLIENT_ID and OPENSKY_CLIENT_SECRET are required; using anonymous access.\");\n    }\n    msg._openskyAuthMode = \"anonymous\";\n    node.status({ fill: \"blue\", shape: \"ring\", text: \"anonymous • ~\" + estimatedCreditCost + \" credit/poll\" });\n    return [msg, null, mapMessage];\n}\n\nconst cached = flow.get(\"openskyOAuth\") || {};\nif (cached.accessToken && cached.expiresAt > Date.now() + 60000) {\n    msg.headers = { Authorization: \"Bearer \" + cached.accessToken };\n    msg._openskyAuthMode = \"authenticated\";\n    node.status({ fill: \"green\", shape: \"dot\", text: \"authenticated • ~\" + estimatedCreditCost + \" credit/poll\" });\n    return [msg, null, mapMessage];\n}\n\nconst tokenMessage = Object.assign({}, msg, {\n    url: \"https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token\",\n    headers: { \"Content-Type\": \"application/x-www-form-urlencoded\" },\n    payload: \"grant_type=client_credentials&client_id=\" + encodeURIComponent(clientId) +\n        \"&client_secret=\" + encodeURIComponent(clientSecret),\n    _openskyDataUrl: dataUrl,\n    _openskyAuthMode: \"token-request\"\n});\nnode.status({ fill: \"yellow\", shape: \"ring\", text: \"refreshing OAuth token\" });\nreturn [null, tokenMessage, mapMessage];",
+        "func": "// OpenSky request, location, and secret-safe OAuth configuration.\n// Edit these defaults for your location. Polling can also be set with OPENSKY_POLL_SECONDS.\nconst defaultCenterLat = 25.7617;\nconst defaultCenterLon = -80.1918;\nconst defaultRadiusKm = 150;\nconst defaultPollSeconds = 300;\n\nfunction finiteNumber(value, fallback) {\n    const parsed = Number(value);\n    return Number.isFinite(parsed) ? parsed : fallback;\n}\n\nlet cfg = {\n    centerLat: defaultCenterLat,\n    centerLon: defaultCenterLon,\n    radiusKm: defaultRadiusKm,\n    pollSeconds: defaultPollSeconds\n};\n\n// Optional runtime overrides. The effective config is stored separately in\n// flow.openskyRadarConfig so changing the defaults above still takes effect.\nfunction applyOverride(source) {\n    if (!source || typeof source !== \"object\") return;\n    cfg.centerLat = finiteNumber(source.centerLat, cfg.centerLat);\n    cfg.centerLon = finiteNumber(source.centerLon, cfg.centerLon);\n    cfg.radiusKm = finiteNumber(source.radiusKm, cfg.radiusKm);\n    cfg.pollSeconds = finiteNumber(source.pollSeconds, cfg.pollSeconds);\n}\n\napplyOverride(global.get(\"openskyRadarOverride\"));\napplyOverride(flow.get(\"openskyRadarOverride\"));\napplyOverride(msg.config);\napplyOverride(msg);\nconst envPollSeconds = env.get(\"OPENSKY_POLL_SECONDS\");\nif (envPollSeconds !== undefined && envPollSeconds !== \"\") {\n    cfg.pollSeconds = finiteNumber(envPollSeconds, cfg.pollSeconds);\n}\n\nif (cfg.centerLat < -90 || cfg.centerLat > 90) {\n    node.error(\"centerLat must be between -90 and 90\", msg);\n    return null;\n}\nif (cfg.centerLon < -180 || cfg.centerLon > 180) {\n    node.error(\"centerLon must be between -180 and 180\", msg);\n    return null;\n}\nif (cfg.radiusKm < 1 || cfg.radiusKm > 500) {\n    node.error(\"radiusKm must be between 1 and 500 km\", msg);\n    return null;\n}\nif (cfg.pollSeconds < 20 || cfg.pollSeconds > 3600) {\n    node.error(\"pollSeconds must be between 20 and 3600 seconds\", msg);\n    return null;\n}\ncfg.pollSeconds = Math.round(cfg.pollSeconds);\n\nconst dLat = cfg.radiusKm / 111;\nconst safeCos = Math.max(Math.abs(Math.cos(cfg.centerLat * Math.PI / 180)), 0.05);\nconst dLon = cfg.radiusKm / (111 * safeCos);\nconst bounds = {\n    lamin: Math.max(-90, cfg.centerLat - dLat),\n    lamax: Math.min(90, cfg.centerLat + dLat),\n    lomin: Math.max(-180, cfg.centerLon - dLon),\n    lomax: Math.min(180, cfg.centerLon + dLon)\n};\n\nconst areaSqDeg = (bounds.lamax - bounds.lamin) * (bounds.lomax - bounds.lomin);\nconst estimatedCreditCost = areaSqDeg <= 25 ? 1 : areaSqDeg <= 100 ? 2 : areaSqDeg <= 400 ? 3 : 4;\n\nconst clientId = env.get(\"OPENSKY_CLIENT_ID\");\nconst clientSecret = env.get(\"OPENSKY_CLIENT_SECRET\");\nconst authConfigured = Boolean(clientId && clientSecret);\n\ncfg = Object.assign(cfg, bounds, {\n    estimatedCreditCost,\n    authConfigured\n});\nflow.set(\"openskyRadarConfig\", cfg);\n\nconst dataUrl = \"https://opensky-network.org/api/states/all\" +\n    \"?lamin=\" + bounds.lamin.toFixed(5) +\n    \"&lamax=\" + bounds.lamax.toFixed(5) +\n    \"&lomin=\" + bounds.lomin.toFixed(5) +\n    \"&lomax=\" + bounds.lomax.toFixed(5) +\n    \"&extended=1\";\n\nmsg.url = dataUrl;\nmsg.centerLat = cfg.centerLat;\nmsg.centerLon = cfg.centerLon;\nmsg.radiusKm = cfg.radiusKm;\nmsg.openskyConfig = cfg;\n\nconst mapKey = [cfg.centerLat, cfg.centerLon, cfg.radiusKm].join(\":\");\nlet mapMessage = null;\nif (context.get(\"lastMapKey\") !== mapKey) {\n    context.set(\"lastMapKey\", mapKey);\n    mapMessage = { openskyConfig: cfg, _mapInit: true };\n}\n\nif (!authConfigured) {\n    if ((clientId && !clientSecret) || (!clientId && clientSecret)) {\n        node.warn(\"Both OPENSKY_CLIENT_ID and OPENSKY_CLIENT_SECRET are required; using anonymous access.\");\n    }\n    msg._openskyAuthMode = \"anonymous\";\n    node.status({ fill: \"blue\", shape: \"ring\", text: \"anonymous • ~\" + estimatedCreditCost + \" credit/poll\" });\n    return [msg, null, mapMessage];\n}\n\nconst cached = flow.get(\"openskyOAuth\") || {};\nif (cached.accessToken && cached.expiresAt > Date.now() + 60000) {\n    msg.headers = { Authorization: \"Bearer \" + cached.accessToken };\n    msg._openskyAuthMode = \"authenticated\";\n    node.status({ fill: \"green\", shape: \"dot\", text: \"authenticated • ~\" + estimatedCreditCost + \" credit/poll\" });\n    return [msg, null, mapMessage];\n}\n\nconst tokenMessage = Object.assign({}, msg, {\n    url: \"https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token\",\n    headers: { \"Content-Type\": \"application/x-www-form-urlencoded\" },\n    payload: \"grant_type=client_credentials&client_id=\" + encodeURIComponent(clientId) +\n        \"&client_secret=\" + encodeURIComponent(clientSecret),\n    _openskyDataUrl: dataUrl,\n    _openskyAuthMode: \"token-request\"\n});\nnode.status({ fill: \"yellow\", shape: \"ring\", text: \"refreshing OAuth token\" });\nreturn [null, tokenMessage, mapMessage];",
         "outputs": 3,
         "timeout": "",
         "noerr": 0,
@@ -731,6 +732,67 @@
         "statusType": "auto",
         "x": 840,
         "y": 900,
+        "wires": []
+    },
+    {
+        "id": "airlabs-health-tick",
+        "type": "inject",
+        "z": "79536b1f3c9bef45",
+        "name": "Report safe AirLabs status every 5 min",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "300",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 14,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 220,
+        "y": 960,
+        "wires": [
+            [
+                "airlabs-health-summary"
+            ]
+        ]
+    },
+    {
+        "id": "airlabs-health-summary",
+        "type": "function",
+        "z": "79536b1f3c9bef45",
+        "name": "Build credential-free AirLabs status",
+        "func": "// AirLabs-only diagnostics. This message never includes the API key or request URL.\nconst cfg = flow.get(\"openskyScheduleConfig\") || {};\nconst meta = flow.get(\"airlabsScheduleMeta\") || {};\nconst cache = flow.get(\"airlabsScheduleCache\") || {};\nconst usage = flow.get(\"airlabsRequestUsage\") || {};\nconst fetchedAt = Number(cache.fetchedAt || 0);\n\nmsg.topic = \"AirLabs schedule health\";\nmsg.payload = {\n    checkedAt: new Date().toISOString(),\n    enabled: Boolean(meta.enabled),\n    ready: Boolean(meta.ready),\n    selectedAirport: cfg.airportIata || meta.airportIata || null,\n    selectedAirportName: cfg.airportName || meta.airportName || null,\n    distanceKm: cfg.airportDistanceKm == null ? null : cfg.airportDistanceKm,\n    selectionMode: cfg.selectionMode || meta.selectionMode || null,\n    records: Number(meta.records || 0),\n    matchKeys: Number(meta.matchKeys || 0),\n    updatedAt: meta.updatedAt || null,\n    cacheAgeMinutes: fetchedAt ? Math.round((Date.now() - fetchedAt) / 6000) / 10 : null,\n    usingStaleCache: Boolean(meta.usingStaleCache),\n    refreshMinutes: Number(cfg.refreshMinutes || 120),\n    estimatedMonthlyRequests: Number(cfg.estimatedMonthlyRequests || 0),\n    monthlyRequestsUsed: Number(usage.count || meta.monthlyRequestsUsed || 0),\n    monthlyRequestCap: Number(cfg.monthlyRequestCap || meta.monthlyRequestCap || 0),\n    quotaGuardActive: Boolean(meta.quotaGuardActive),\n    message: meta.message || null,\n    lastErrorCode: meta.lastErrorCode || null,\n    lastError: meta.lastError || null\n};\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 550,
+        "y": 960,
+        "wires": [
+            [
+                "debug-airlabs-health"
+            ]
+        ]
+    },
+    {
+        "id": "debug-airlabs-health",
+        "type": "debug",
+        "z": "79536b1f3c9bef45",
+        "name": "AirLabs status (safe, every 5 min)",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 870,
+        "y": 960,
         "wires": []
     },
     {
