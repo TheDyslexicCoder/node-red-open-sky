@@ -79,21 +79,23 @@ Anonymous state vectors have 10-second time resolution and authenticated state v
 
 ### Optional OAuth mode
 
-For a larger allowance, create an API client in your OpenSky account and provide both credentials to the Node-RED process as operating-system, service, or Docker environment variables:
+For a larger allowance, create an API client in your OpenSky account. To configure it entirely in Node-RED, double-click the **OpenSky Nearby Planes Radar** flow tab, open **Environment Variables**, and add both of these private values:
 
 ```text
 OPENSKY_CLIENT_ID=replace_with_your_client_id
 OPENSKY_CLIENT_SECRET=replace_with_your_client_secret
 ```
 
-Restart Node-RED after setting them. The flow automatically:
+Click **Done** and **Deploy**. The next poll should change `radar.authMode` from `Anonymous` to `Authenticated`. The health Debug also reports `creditsRemaining` from OpenSky's live `X-Rate-Limit-Remaining` response header, the estimated cost per poll, and the configured polling interval.
+
+Operating-system, service, and Docker environment variables remain supported for share-safe deployments. The flow automatically:
 
 1. Requests an OAuth2 client-credentials token.
 2. Caches the short-lived access token in flow context.
 3. Refreshes it shortly before expiration.
 4. Falls back to anonymous access if optional authentication fails.
 
-Do **not** paste a client secret into the function node, the exported JSON, a Git commit, a Debug node, or a public screenshot. This repository contains no real credential or placeholder that could be mistaken for one.
+Do **not** paste a client secret into a Function node, Git commit, Debug node, or public screenshot. Flow-level Environment Variables are convenient on a private Node-RED installation, but clear their private values before exporting or publishing the flow.
 
 OpenSky no longer accepts basic username/password authentication. OAuth2 client credentials are the supported authenticated method; see the official [authentication instructions](https://openskynetwork.github.io/opensky-api/rest.html#authentication).
 
@@ -225,7 +227,7 @@ Aircraft returned in the bounding-box corners are filtered out when they fall ou
 
 An empty **Errors only (empty is healthy)** Debug node means no handled failure has occurred. It was intentionally quiet in earlier versions, which could make a working flow look inactive.
 
-The separate **System health (safe, every 5 min)** Debug node now confirms routine activity. It reports the radar center and radius, aircraft count, directory refresh counts, selected airport, schedule-cache status, and monthly AirLabs request count. It never includes OAuth credentials, API keys, authorization headers, or request URLs.
+The separate **System health (safe, every 5 min)** Debug node now confirms routine activity. It reports the radar center and radius, aircraft count, OpenSky authentication mode, live credits remaining, estimated cost per poll, polling interval, directory refresh counts, selected airport, schedule-cache status, and monthly AirLabs request count. It never includes OAuth credentials, API keys, authorization headers, or request URLs.
 
 The dedicated **AirLabs status (safe, every 5 min)** Debug node isolates schedule diagnostics: whether AirLabs is enabled, the selected airport, cached record and match-key counts, cache age, refresh interval, monthly usage, quota guard, and sanitized error information. Click **Report safe AirLabs status every 5 min** to request this report immediately.
 
