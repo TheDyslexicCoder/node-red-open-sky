@@ -2,7 +2,7 @@
   "name": "node-red-open-sky",
   "version": "1.0.0",
   "private": true,
-  "description": "Validation tests for the Node-RED OpenSky radar flow",
+  "description": "Validation tests for the Node-RED OpenSky radar with optional AirLabs routes and schedules",
   "scripts": {
     "test": "node --test",
     "test:airlabs": "node scripts/airlabs-smoke.js",
