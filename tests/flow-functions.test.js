@@ -428,6 +428,46 @@ test("aircraft hex matching adds a live route even when the callsign is not on t
     assert.match(rt.msg.payload.popup, /AirLabs live/);
 });
 
+test("unmatched aircraft clearly report that AirLabs has no published route", () => {
+    const now = Date.now();
+    const rt = runtime({
+        flow: store({
+            airlabsLiveCache: {
+                byHex: {}, byFlight: {}, fetchedAt: now,
+                expiresAt: now + 60_000, staleUntil: now + 60_000
+            }
+        }),
+        msg: { payload: {
+            name: "N12345 · a1b2c3",
+            popup: "<div><span style='color:#64748b'>Operator</span><b style='color:#0f172a'>Not identified</b></div>"
+        } }
+    });
+    execute("operator-label-resolver", rt);
+    assert.match(rt.msg.payload.popup, /Private \/ general aviation/);
+    assert.match(rt.msg.payload.popup, /Route/);
+    assert.match(rt.msg.payload.popup, /Not available from AirLabs/);
+    assert.match(rt.msg.payload.popup, /No matching AirLabs live record/);
+});
+
+test("matched AirLabs records with incomplete endpoints do not invent a route", () => {
+    const now = Date.now();
+    const rt = runtime({
+        flow: store({
+            airlabsLiveCache: {
+                byHex: { A1B2C3: { flightIata: "AA999", originIata: "MIA", destinationIata: "", status: "en-route" } },
+                byFlight: {}, fetchedAt: now, expiresAt: now + 60_000, staleUntil: now + 60_000
+            }
+        }),
+        msg: { payload: {
+            name: "AAL999 · a1b2c3",
+            popup: "<div><span style='color:#64748b'>Operator</span><b style='color:#0f172a'>Not identified</b></div>"
+        } }
+    });
+    execute("operator-label-resolver", rt);
+    assert.match(rt.msg.payload.popup, /Not available from AirLabs/);
+    assert.doesNotMatch(rt.msg.payload.popup, /MIA →/);
+});
+
 test("departure-board matches display the selected airport departure gate", () => {
     const now = Date.now();
     const schedule = {
@@ -575,9 +615,11 @@ test("the periodic health summary is nonempty and contains no credentials", () =
 test("the flow tab exposes editor-based AirLabs and polling configuration", () => {
     const tab = flowDefinition.find(node => node.type === "tab");
     assert.deepEqual(tab.env, []);
+    assert.match(tab.label, /OpenSky \+ AirLabs Live Flight Radar/);
     assert.match(tab.info, /Environment Variables/);
     assert.match(tab.info, /AIRLABS_API_KEY/);
     assert.match(tab.info, /OPENSKY_POLL_SECONDS/);
+    assert.match(tab.info, /Raspberry Pi fallback/);
 });
 
 test("OpenSky polling metadata follows the editor environment value", () => {

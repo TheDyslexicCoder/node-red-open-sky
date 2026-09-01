@@ -1,8 +1,21 @@
-# Node-RED OpenSky Live Air Traffic Radar
+# Node-RED Live Flight Radar — OpenSky with Optional AirLabs Routes
 
-A ready-to-import Node-RED flow that plots nearby aircraft from the OpenSky Network on an interactive world map.
+A ready-to-import Node-RED flow that plots nearby OpenSky aircraft on an interactive world map and can optionally add AirLabs routes, flight status, and airport schedules.
 
 ![OpenSky radar showing live Miami-area aircraft](screenshots/worldmap-live-miami-air-traffic.png)
+
+**Jump to:** [Quick start](#quick-start--radar-only) · [OpenSky authentication](#optional-authenticated-opensky-mode) · [AirLabs setup](#airlabs-credential-setup) · [Node-RED verification](#first-deployment-verification--node-red-editor) · [Troubleshooting](#troubleshooting)
+
+## Data sources and responsibilities
+
+The flow combines four complementary sources. Each one has a separate job:
+
+- **OpenSky Network — live positions:** supplies aircraft coordinates, altitude, speed, heading, callsign, and on-ground status. OpenSky is the only source that creates and updates map markers.
+- **AirLabs — routes and schedules:** optionally adds public flight numbers, departure and arrival airports, flight status, airport timetables, delays, terminals, gates, and baggage information when available.
+- **FAA — operator information:** supplies the official company, telephony, and ICAO three-letter-designator directory used to identify airline and aviation operators.
+- **OurAirports — airport reference data:** supplies public airport names, IATA/ICAO codes, coordinates, and scheduled-service classifications so the nearest relevant airport can follow the radar location.
+
+These sources complement one another. AirLabs, FAA, and OurAirports enrich the display, but none of them replaces OpenSky's live aircraft positions. If an enrichment source is unavailable, the OpenSky radar continues operating.
 
 ## What it does
 
@@ -32,7 +45,7 @@ A ready-to-import Node-RED flow that plots nearby aircraft from the OpenSky Netw
 
 The flow export declares the required worldmap package, but you can also install it from **Menu → Manage palette → Install**.
 
-## Quick start
+## Quick start — radar only
 
 1. Download [`OpenSky-Planes-WorldMap.json`](OpenSky-Planes-WorldMap.json).
 2. In Node-RED, choose **Menu → Import → Clipboard** and import the file.
@@ -44,10 +57,19 @@ The flow export declares the required worldmap package, but you can also install
    const defaultRadiusKm = 150;
    ```
 
-4. Deploy the flow.
-5. Open `http://<your-node-red-host>:1880/worldmapplanes`.
+4. Click **Done**, then **Deploy**.
+5. Click the small button on the left of **Poll every 5 min (anonymous-safe default)** once.
+6. Open `http://<your-node-red-host>:1880/worldmapplanes`.
 
-The map automatically fits the selected radar area whenever a viewer connects.
+The map automatically fits the selected radar area whenever a viewer connects. This basic setup requires no API key. Continue below only if you want authenticated OpenSky access or AirLabs routes and schedules.
+
+### Names and URLs
+
+- **Display title:** Node-RED Live Flight Radar — OpenSky with Optional AirLabs Routes
+- **GitHub repository:** keep `node-red-open-sky`; renaming it would change existing links and is not required.
+- **Map URL:** keep `/worldmapplanes`; existing bookmarks and Node-RED links continue to work.
+
+The title describes the new capability without implying that AirLabs is required. OpenSky remains the live position source and the radar continues working when AirLabs is disabled.
 
 ## API access and safe credential handling
 
@@ -59,14 +81,22 @@ At the included Miami location and 150 km radius, the bounding box is under 25 s
 
 ### Changing the OpenSky polling interval in Node-RED
 
-The default is five minutes. To change it entirely in the Node-RED editor:
+The default is five minutes. The Inject node controls the real request schedule; `pollSeconds` keeps marker expiry and Debug information aligned with that schedule.
 
-1. Double-click the **OpenSky Nearby Planes Radar** flow tab.
+If your flow tab shows **Environment Variables**:
+
+1. Double-click the **OpenSky + AirLabs Live Flight Radar** flow tab.
 2. Open **Environment Variables**, click **Add**, name it `OPENSKY_POLL_SECONDS`, and enter the desired number of seconds (`300` is the default when it is absent).
 3. Double-click the **Poll every 5 min (anonymous-safe default)** Inject node.
 4. Set **Repeat → interval** to the same value, click **Done**, optionally rename the node, and **Deploy**.
 
-Use the same value in both places. `OPENSKY_POLL_SECONDS` keeps marker expiry and health information aligned with the Inject schedule; the Inject node controls how often the HTTP request actually starts.
+If your Node-RED editor does not show **Environment Variables**, open **Prepare location, auth & request**, find this line near the top, and change `300` to the same number of seconds used by the Inject node:
+
+```javascript
+const defaultPollSeconds = 300;
+```
+
+Use the same value in both places. Leave both at five minutes while first testing credentials.
 
 For the included 150 km Miami bounding box, each poll normally costs one `/states/all` credit:
 
@@ -78,16 +108,48 @@ For the included 150 km Miami bounding box, each poll normally costs one `/state
 
 Anonymous state vectors have 10-second time resolution and authenticated state vectors have 5-second resolution. Twenty-second polling can therefore return newer positions, but it is not sustainable on the Anonymous or Standard daily allowance. A `429 Too Many Requests` response means the current bucket is exhausted; restore a slower interval and wait for the provider's retry window.
 
-### Optional OAuth mode
+### Optional authenticated OpenSky mode
 
-For a larger allowance, create an API client in your OpenSky account. To configure it entirely in Node-RED, double-click the **OpenSky Nearby Planes Radar** flow tab, open **Environment Variables**, and add both of these private values:
+For a larger allowance, create an API client in your OpenSky account. OpenSky provides a JSON object containing both values, for example:
+
+```json
+{"clientId":"example-api-client","clientSecret":"example-secret"}
+```
+
+Both values are required. A Client ID by itself cannot authenticate.
+
+#### Method A — Environment Variables, when visible
+
+Double-click the **OpenSky + AirLabs Live Flight Radar** flow tab, open **Environment Variables**, and add:
 
 ```text
 OPENSKY_CLIENT_ID=replace_with_your_client_id
 OPENSKY_CLIENT_SECRET=replace_with_your_client_secret
 ```
 
-Click **Done** and **Deploy**. The next poll should change `radar.authMode` from `Anonymous` to `Authenticated`. The health Debug also reports `creditsRemaining` from OpenSky's live `X-Rate-Limit-Remaining` response header, the estimated cost per poll, and the configured polling interval.
+#### Method B — private Raspberry Pi editor fallback
+
+Use this only when your Node-RED editor does not show flow-level Environment Variables:
+
+1. Double-click **Prepare location, auth & request**.
+2. Find these exact lines, currently around Function lines 70–71:
+
+   ```javascript
+   const clientId = env.get("OPENSKY_CLIENT_ID");
+   const clientSecret = env.get("OPENSKY_CLIENT_SECRET");
+   ```
+
+3. Replace them with exactly one declaration for each value:
+
+   ```javascript
+   const clientId = "PASTE_ONLY_YOUR_CLIENT_ID_HERE";
+   const clientSecret = "PASTE_ONLY_YOUR_CLIENT_SECRET_HERE";
+   ```
+
+4. Paste only the two values from the OpenSky JSON—not the braces, property names, or commas.
+5. Click **Done**, **Deploy**, and then **Poll every 5 min**.
+
+The node should briefly show `refreshing OAuth token`, followed by `authenticated`. The health Debug should change `radar.authMode` from `Anonymous` to `Authenticated` and report the live OpenSky credit balance.
 
 Operating-system, service, and Docker environment variables remain supported for share-safe deployments. The flow automatically:
 
@@ -96,7 +158,7 @@ Operating-system, service, and Docker environment variables remain supported for
 3. Refreshes it shortly before expiration.
 4. Falls back to anonymous access if optional authentication fails.
 
-Do **not** paste a client secret into a Function node, Git commit, Debug node, or public screenshot. Flow-level Environment Variables are convenient on a private Node-RED installation, but clear their private values before exporting or publishing the flow.
+Environment Variables are the preferred share-safe method. The Function fallback is for a private local Node-RED installation only. Never export, commit, upload, or screenshot a flow while either credential is hard-coded. Restore the original `env.get(...)` lines before publishing an export.
 
 OpenSky no longer accepts basic username/password authentication. OAuth2 client credentials are the supported authenticated method; see the official [authentication instructions](https://openskynetwork.github.io/opensky-api/rest.html#authentication).
 
@@ -111,9 +173,13 @@ The radar works without OurAirports or AirLabs. OurAirports needs no API key. Wh
 
 OpenSky remains the source for every map position and for the exact 150 km circular boundary. The AirLabs live request uses a box around that circle only to build a route lookup. Records in the box corners cannot create map markers, because an aircraft must first be present in OpenSky's exact circle.
 
-Create or activate an [AirLabs](https://airlabs.co/) account. The simplest Raspberry Pi/Node-RED setup requires no terminal:
+### AirLabs credential setup
 
-1. In the Node-RED editor, double-click the **OpenSky Nearby Planes Radar** flow tab at the top of the workspace.
+Create or activate an [AirLabs](https://airlabs.co/) account. No terminal is required.
+
+#### Method A — Environment Variables, when visible
+
+1. In the Node-RED editor, double-click the **OpenSky + AirLabs Live Flight Radar** flow tab at the top of the workspace.
 2. Open the **Environment Variables** section and click **Add**.
 3. Enter `AIRLABS_API_KEY` as the name and paste the private key into its value field.
 4. Do not add `AIRLABS_AIRPORT_IATA` for automatic airport selection. To pin one airport, add it as a second variable with a three-character IATA value.
@@ -122,11 +188,33 @@ Create or activate an [AirLabs](https://airlabs.co/) account. The simplest Raspb
 7. Click the Inject button beside **Check whether selected airport needs refresh** once.
 8. Open **AirLabs live routes + schedules (safe)** in the Debug sidebar. A working configuration shows live-route records, a selected airport, schedule records, and safe request-usage information.
 
-The Function nodes named **Prepare safe live-route request** and **Prepare safe schedule requests** both read the same editor variable. Users do not paste the key into either function:
+Both AirLabs Function nodes read the same variable:
 
 ```javascript
 const apiKey = env.get("AIRLABS_API_KEY");
 ```
+
+#### Method B — private Raspberry Pi editor fallback
+
+Use this only when your Node-RED editor does not show flow-level Environment Variables:
+
+1. Open **Prepare safe live-route request**.
+2. Find this exact line, currently around Function line 46:
+
+   ```javascript
+   const apiKey = env.get("AIRLABS_API_KEY");
+   ```
+
+3. Replace it with:
+
+   ```javascript
+   const apiKey = "PASTE_YOUR_AIRLABS_KEY_HERE";
+   ```
+
+4. Click **Done**.
+5. Open **Prepare safe schedule requests** and find the same `env.get("AIRLABS_API_KEY")` declaration, currently around Function line 89.
+6. Paste the identical `const apiKey = "...";` line from the first Function. Copy the entire line instead of typing the key twice; this prevents the live-route and schedule nodes from using different keys.
+7. Click **Done**, then **Deploy**.
 
 For deployments managed outside the Node-RED editor, the same variable can instead be supplied to the Node-RED process:
 
@@ -141,7 +229,7 @@ Two optional flow-tab Environment Variables make the integration adaptable:
 - `AIRLABS_LIVE_REFRESH_MINUTES` changes the live-route cache interval from its five-minute default. Accepted values are 1 to 60 minutes; the one-minute Inject node checks the guard without making an unnecessary provider call.
 - `AIRLABS_DAILY_REQUEST_CAP` changes the local safety stop from its default of 1,000 requests per UTC day. Only raise it after checking the current allowance in the AirLabs account dashboard.
 
-Never hard-code an AirLabs key in a Function node, GitHub, a Debug message, or a screenshot. A flow-level Environment Variable is convenient on a private Node-RED installation, but its value can be included when the flow is exported. Clear the value before exporting or publishing the JSON. Treat any key shared in a chat, issue, or commit as exposed: revoke it and create a replacement before use.
+Environment Variables are preferred. The Function fallback is local-only: never export or publish the edited flow with the key present. Restore both original `env.get("AIRLABS_API_KEY")` lines first. Treat any key shared in a chat, issue, screenshot, export, or commit as exposed and replace it before publication.
 
 The included defaults are conservative and independent of the OpenSky polling interval:
 
@@ -155,7 +243,7 @@ The included defaults are conservative and independent of the OpenSky polling in
 
 AirLabs documents `bbox`, `hex`, flight identifiers, departure/arrival codes, status, and field selection for Real-Time Flights. It documents a maximum 50 schedule records for Free keys and a schedule horizon of up to 10 hours. During the August 31, 2026 live MIA validation, the v9 schedules endpoint accepted `limit=50` but returned a 100-row provider page with pagination metadata. The flow therefore treats the query limit as a request hint and independently slices each schedule direction to 50 before caching. Fields can still be missing or plan-dependent, so the popup omits unavailable values instead of inventing them. Confirm the current [AirLabs introduction and errors](https://airlabs.co/docs/), [Real-Time Flights](https://airlabs.co/docs/flights), and [Schedules](https://airlabs.co/docs/schedules) documentation, plus the limits shown in your account dashboard, before changing refresh intervals or the daily guard.
 
-Any visible scheduled flight can receive a route when AirLabs returns the same aircraft hex, including pass-through traffic and flights using another nearby airport. Only flights connected to the selected airport can receive that airport's detailed timetable fields. Private aircraft and provider records without a published route continue to show OpenSky and FAA information without a guessed origin or destination. Automatic airport selection never chooses an airport outside the configured radar radius.
+Any visible scheduled flight can receive a route when AirLabs returns the same aircraft hex, including pass-through traffic and flights using another nearby airport. Only flights connected to the selected airport can receive that airport's detailed timetable fields. Private aircraft and provider records without a published route show **Route: Not available from AirLabs** instead of a guessed origin or destination. Automatic airport selection never chooses an airport outside the configured radar radius.
 
 The world-map URL remains `http://<your-node-red-host>:1880/worldmapplanes`; moving the center does not require a new URL or a separate flow.
 
@@ -167,9 +255,31 @@ The world-map URL remains `http://<your-node-red-host>:1880/worldmapplanes`; mov
 4. **Marker enrichment:** on each OpenSky update, the resolver first tries the AirLabs aircraft-hex index, then ICAO/IATA flight numbers, then the selected-airport schedule index. A matching route appears as `MIA → MCO`, `MCO → MIA`, or the route AirLabs actually returned.
 5. **Expiry:** neither AirLabs cache creates or preserves an aircraft marker. When the next OpenSky result no longer contains the plane, its marker expires normally.
 
-### First-deployment verification
+### First-deployment verification — Node-RED editor
 
-With `AIRLABS_API_KEY` entered in the flow's **Environment Variables**, deploy the flow, click **Check live routes every minute (5 min guard)**, and click **Check whether selected airport needs refresh**. Wait for the safe AirLabs Debug message, then click the OpenSky polling Inject once if you want to refresh marker popups immediately instead of waiting for the next normal OpenSky poll.
+After configuring the credentials with either method:
+
+1. Click **Deploy**.
+2. Click **Poll every 5 min**.
+3. Click **Check live routes every minute (5 min guard)**.
+4. Click **Check whether selected airport needs refresh**.
+5. Wait about 10 seconds, then click **Poll every 5 min** once more so the newest route cache is applied to map popups.
+6. Click **Report safe health every 5 min** and **Report safe AirLabs status every 5 min** to request immediate Debug messages.
+
+A successful setup shows:
+
+```text
+radar.authMode: "Authenticated"
+liveRoutes.enabled: true
+liveRoutes.records: greater than 0
+liveRoutes.lastErrorCode: null
+schedules.enabled: true
+schedules.records: greater than 0 at an active major airport
+```
+
+Open a commercial-aircraft marker and look for **Public flight**, **Route**, **Flight status**, and **Route source**. Some private, blocked, newly visible, or unmatched aircraft will correctly show that no AirLabs route is available.
+
+### Optional developer smoke tests
 
 To verify the active key and current account entitlement before deploying, run the opt-in smoke test from this repository:
 
@@ -195,7 +305,7 @@ In the **System health (safe, every 5 min)** Debug output, confirm:
 - `liveRoutes.enabled` and `liveRoutes.ready` are `true`, `records` is greater than zero, and `updatedAt` is populated.
 - `schedules.enabled` and `schedules.ready` are `true`.
 - `schedules.updatedAt` is populated and `schedules.records` is greater than zero for an active major-airport board.
-- `airlabsUsage.requestsUsed` increases by one for each live-route refresh and two for each timetable refresh; `providerCreditsRemaining` is populated when AirLabs sends the header.
+- `airlabsUsage.requestsUsed` increases by one for each attempted live-route refresh and two for each attempted timetable refresh. Failed attempts are counted conservatively because they may still consume provider capacity. `providerCreditsRemaining` is populated only when AirLabs sends the header.
 
 The general health message appears automatically after startup and every five minutes. You can also click **Report safe health every 5 min** to check immediately. **AirLabs live routes + schedules (safe)** separates live-route, timetable, and usage diagnostics. If AirLabs rejects a request, **Errors only (empty is healthy)** reports a sanitized code such as `unknown_api_key`, `wrong_params`, or `month_limit_exceeded`; none of these outputs prints the key or request URL.
 
@@ -264,13 +374,14 @@ The dedicated **AirLabs live routes + schedules (safe)** Debug node separates li
 | Map loads but has no aircraft | There may be no recent OpenSky positions in the selected circle | Increase the radius moderately and check the Debug sidebar |
 | HTTP 401 | The OAuth access token was rejected or expired | The flow clears it and requests a new token on the next poll |
 | HTTP 429 | The current API credit bucket is exhausted | Wait for the refill time shown by OpenSky; do not shorten the poll interval |
-| OAuth warning, anonymous fallback | One or both environment variables are missing or invalid | Verify both variables outside the flow and restart Node-RED |
+| OAuth warning or `Anonymous` after deployment | One or both OpenSky values are missing, invalid, or were pasted in the wrong form | Confirm there is exactly one `const clientId` and one `const clientSecret`; paste only their values, deploy, and click the OpenSky Inject node |
 | Connection problem dialog | Node-RED could not reach OpenSky | Check DNS, firewall, proxy, and outbound HTTPS from the Node-RED host |
 | Map opens at the wrong place | The flow was not redeployed or another override is active | Check the effective `flow.openskyRadarConfig` value |
 | Waiting for airport directory | The weekly OurAirports download has not completed yet | Confirm outbound HTTPS access to `davidmegginson.github.io`; cached data is reused when available |
 | No scheduled airport in radar radius | No scheduled-service airport with an IATA code is inside the selected circle | Increase the radius moderately or deliberately set `AIRLABS_AIRPORT_IATA` |
-| AirLabs live routes disabled or AirLabs disabled • airport selected | The Function nodes cannot read the key | Double-click the flow tab, enter `AIRLABS_API_KEY` under Environment Variables, click Done and Deploy, then click both AirLabs Inject nodes |
-| Live-route records exist but a plane has no route | AirLabs did not return that aircraft hex or a published route for it | This is expected for some private, blocked, incomplete, or unmatched records; never infer a route from heading alone |
+| AirLabs live routes disabled or AirLabs disabled • airport selected | The Function nodes cannot read the key | Use Method A when Environment Variables are visible, or apply the private Raspberry Pi fallback to both named AirLabs Functions; deploy and click both AirLabs Inject nodes |
+| `unknown_api_key` for live routes but schedules work | The two local AirLabs Function lines do not contain the identical key | Copy the entire working `const apiKey = "...";` line from **Prepare safe schedule requests** into **Prepare safe live-route request**, deploy, and wait for the five-minute guard |
+| Live-route records exist but a plane has no route | AirLabs did not return that aircraft hex or a complete published route | This is expected for some private, blocked, incomplete, newly visible, or unmatched records; the popup reports that the route is unavailable and never infers one from heading |
 | AirLabs live-route error | The live `/flights` request failed or its response changed | Check `liveRoutes.lastErrorCode` in the safe AirLabs Debug output |
 | AirLabs schedule error | The key is inactive, expired, invalid, rate-limited, the parameters were rejected, or the response changed | Check the sanitized `lastErrorCode` in `flow.airlabsScheduleMeta` and the errors-only Debug node |
 | AirLabs daily request guard reached | The local safety cap has been reached | Wait for the next UTC day or deliberately raise `AIRLABS_DAILY_REQUEST_CAP` after checking the account dashboard |
