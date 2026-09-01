@@ -6,6 +6,17 @@ A ready-to-import Node-RED flow that plots nearby OpenSky aircraft on an interac
 
 **Jump to:** [Quick start](#quick-start--radar-only) · [OpenSky authentication](#optional-authenticated-opensky-mode) · [AirLabs setup](#airlabs-credential-setup) · [Node-RED verification](#first-deployment-verification--node-red-editor) · [Troubleshooting](#troubleshooting)
 
+## Data sources and responsibilities
+
+The flow combines four complementary sources. Each one has a separate job:
+
+- **OpenSky Network — live positions:** supplies aircraft coordinates, altitude, speed, heading, callsign, and on-ground status. OpenSky is the only source that creates and updates map markers.
+- **AirLabs — routes and schedules:** optionally adds public flight numbers, departure and arrival airports, flight status, airport timetables, delays, terminals, gates, and baggage information when available.
+- **FAA — operator information:** supplies the official company, telephony, and ICAO three-letter-designator directory used to identify airline and aviation operators.
+- **OurAirports — airport reference data:** supplies public airport names, IATA/ICAO codes, coordinates, and scheduled-service classifications so the nearest relevant airport can follow the radar location.
+
+These sources complement one another. AirLabs, FAA, and OurAirports enrich the display, but none of them replaces OpenSky's live aircraft positions. If an enrichment source is unavailable, the OpenSky radar continues operating.
+
 ## What it does
 
 - Shows live aircraft inside a configurable circular search area
