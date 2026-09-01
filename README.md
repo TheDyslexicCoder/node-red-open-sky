@@ -201,7 +201,7 @@ const apiKey = env.get("AIRLABS_API_KEY");
 Use this only when your Node-RED editor does not show flow-level Environment Variables:
 
 1. Open **Prepare safe live-route request**.
-2. Find this exact line, currently around Function line 46:
+2. Find this exact line, currently at Function line 73:
 
    ```javascript
    const apiKey = env.get("AIRLABS_API_KEY");
@@ -230,7 +230,7 @@ Three optional flow-tab Environment Variables make the integration adaptable:
 
 - `AIRLABS_LIVE_REFRESH_MINUTES` changes the live-route interval from its 120-minute default. Accepted values are 1 to 1,440 minutes; the one-minute Inject node only checks the guard and does not call AirLabs before the interval is due.
 - `AIRLABS_SCHEDULE_REFRESH_MINUTES` changes the selected-airport timetable interval from its 360-minute default. Accepted values are 15 to 1,440 minutes.
-- `AIRLABS_MONTHLY_REQUEST_CAP` changes the local rolling 30-day safety stop from its default of 900 attempted requests. Keep this below the allowance shown in the AirLabs account dashboard so testing and redeployments have a buffer.
+- `AIRLABS_MONTHLY_REQUEST_CAP` changes the local rolling 30-day safety stop from its default of 750 attempted requests. Keep this below the allowance shown in the AirLabs account dashboard so testing, prior dashboard usage, restarts, and redeployments have a buffer.
 
 Environment Variables are preferred. The Function fallback is local-only: never export or publish the edited flow with the key present. Restore both original `env.get("AIRLABS_API_KEY")` lines first. Treat any key shared in a chat, issue, screenshot, export, or commit as exposed and replace it before publication.
 
@@ -241,7 +241,7 @@ The included defaults are designed for an AirLabs account showing approximately 
 - Live-route lookup: one AirLabs request every two hours, or about **360 requests per 30 days**.
 - Selected-airport timetable: two AirLabs requests every six hours, or about **240 requests per 30 days**.
 - Combined default: about **600 AirLabs requests per 30 days**, regardless of whether 5 or 50 aircraft are visible.
-- Local safety guard: 900 attempted requests in any rolling 30-day window, leaving approximately 100 requests of a 1,000-request allowance for setup, testing, failures, and redeployments.
+- Local safety guard: 750 attempted requests in any rolling 30-day window, leaving approximately 250 requests of a 1,000-request allowance for prior dashboard usage, setup, testing, failures, restarts, and redeployments.
 - Authoritative limit: the allowance and usage shown in the AirLabs account dashboard always take priority. Provider plans can differ, and the local counter cannot see requests made by other applications or before this flow started.
 - Schedule storage: at most 50 departures and 50 arrivals, even if the provider returns a larger page.
 - Cache behavior: successful live-route data is reused between two-hour refreshes and can remain as clearly labeled stale data for up to six hours after a failure. Selected-airport schedules can remain as labeled stale data for up to 24 hours.
@@ -261,7 +261,8 @@ The world-map URL remains `http://<your-node-red-host>:1880/worldmapplanes`; mov
 2. **AirLabs live routes:** every two hours by default. One bounding-box response is minimized, cached, and indexed by aircraft hex and flight number; it does not replace OpenSky coordinates.
 3. **AirLabs selected-airport schedules:** every six hours. Two responses provide the nearest airport's timetable details and are cached between refreshes.
 4. **Marker enrichment:** on each OpenSky update, the resolver first tries the AirLabs aircraft-hex index, then ICAO/IATA flight numbers, then the selected-airport schedule index. A matching route appears as `MIA → MCO`, `MCO → MIA`, or the route AirLabs actually returned.
-5. **Expiry:** neither AirLabs cache creates or preserves an aircraft marker. When the next OpenSky result no longer contains the plane, its marker expires normally.
+5. **Location changes:** changing the radar center or radius clears the old live-route cache and permits one immediate AirLabs refresh for the new area. Miami enrichment is therefore never reused after moving the radar to Chicago or San Francisco.
+6. **Expiry:** neither AirLabs cache creates or preserves an aircraft marker. When the next OpenSky result no longer contains the plane, its marker expires normally.
 
 ### First-deployment verification — Node-RED editor
 
@@ -314,7 +315,8 @@ In the **System health (safe, every 5 min)** Debug output, confirm:
 - `schedules.enabled` and `schedules.ready` are `true`.
 - `schedules.updatedAt` is populated and `schedules.records` is greater than zero for an active major-airport board.
 - `airlabsUsage.requestsUsed` increases by one for each attempted live-route refresh and two for each attempted timetable refresh. Failed attempts are counted conservatively because they may still consume provider capacity.
-- `airlabsUsage.estimated30DayRequests` should show approximately `600`, `monthlyRequestCap` should show `900`, and `requestsRemainingInLocalBudget` shows the remaining local buffer.
+- `airlabsUsage.estimated30DayRequests` should show approximately `600`, `monthlyRequestCap` should show `750`, and `requestsRemainingInLocalBudget` shows the remaining local buffer.
+- `schedules.partialFailure: true` means either the arrival or departure board failed while the other board succeeded. Check `lastErrorDirection`; the flow preserves this warning instead of allowing the successful response to hide it.
 - `providerCreditsRemaining` is populated only when AirLabs sends the header. The AirLabs account dashboard is authoritative and may show more usage than Node-RED because it includes earlier tests and other applications.
 
 The general health message appears automatically after startup and every five minutes. You can also click **Report safe health every 5 min** to check immediately. **AirLabs live routes + schedules (safe)** separates live-route, timetable, and usage diagnostics. If AirLabs rejects a request, **Errors only (empty is healthy)** reports a sanitized code such as `unknown_api_key`, `wrong_params`, or `month_limit_exceeded`; none of these outputs prints the key or request URL.
@@ -346,7 +348,7 @@ Optional schedule settings can be overridden with `global.openskyScheduleOverrid
   "airportIata": "",
   "refreshMinutes": 360,
   "maxRecords": 50,
-  "monthlyRequestCap": 900
+  "monthlyRequestCap": 750
 }
 ```
 
@@ -357,7 +359,7 @@ Optional live-route settings can be overridden with `global.openskyAirLabsLiveOv
 ```json
 {
   "refreshMinutes": 120,
-  "monthlyRequestCap": 900
+  "monthlyRequestCap": 750
 }
 ```
 
@@ -373,7 +375,7 @@ Aircraft returned in the bounding-box corners are filtered out when they fall ou
 
 An empty **Errors only (empty is healthy)** Debug node means no handled failure has occurred. It was intentionally quiet in earlier versions, which could make a working flow look inactive.
 
-The separate **System health (safe, every 5 min)** Debug node confirms routine activity. It reports the radar center and radius, aircraft count, OpenSky authentication mode, live credits remaining, estimated cost per poll, polling interval, directory refresh counts, AirLabs live-route and schedule-cache status, the selected airport, rolling 30-day AirLabs usage, the 900-request local cap, remaining local budget, and the provider's remaining credits when available. It never includes OAuth credentials, API keys, authorization headers, or request URLs.
+The separate **System health (safe, every 5 min)** Debug node confirms routine activity. It reports the radar center and radius, aircraft count, OpenSky authentication mode, live credits remaining, estimated cost per poll, polling interval, directory refresh counts, AirLabs live-route and schedule-cache status, the selected airport, rolling 30-day AirLabs usage, the 750-request local cap, remaining local budget, partial schedule failures, and the provider's remaining credits when available. It never includes OAuth credentials, API keys, authorization headers, or request URLs.
 
 The dedicated **AirLabs live routes + schedules (safe)** Debug node separates live-route diagnostics, selected-airport timetable diagnostics, and rolling usage. It includes cached row and match-key counts, cache ages, refresh intervals, estimated 30-day usage, remaining local budget, the quota guard, and sanitized errors. Click **Report safe AirLabs status every 5 min** to request this report immediately. The reporting Inject node itself does not call AirLabs.
 
@@ -394,7 +396,8 @@ The dedicated **AirLabs live routes + schedules (safe)** Debug node separates li
 | Live-route records exist but a plane has no route | AirLabs did not return that aircraft hex or a complete published route | This is expected for some private, blocked, incomplete, newly visible, or unmatched records; the popup reports that the route is unavailable and never infers one from heading |
 | AirLabs live-route error | The live `/flights` request failed or its response changed | Check `liveRoutes.lastErrorCode` in the safe AirLabs Debug output |
 | AirLabs schedule error | The key is inactive, expired, invalid, rate-limited, the parameters were rejected, or the response changed | Check the sanitized `lastErrorCode` in `flow.airlabsScheduleMeta` and the errors-only Debug node |
-| AirLabs 30-day request guard reached | The local flow has counted 900 attempted requests in its rolling window | Leave the guard in place; requests age out automatically after 30 days, and the AirLabs dashboard remains authoritative |
+| AirLabs 30-day request guard reached | The local flow has counted 750 attempted requests in its rolling window | Leave the guard in place; requests age out automatically after 30 days, and the AirLabs dashboard remains authoritative |
+| `schedules.partialFailure: true` | One schedule direction succeeded while the other failed | Check `schedules.lastErrorDirection` and the errors-only Debug node; cached data remains available where possible |
 | AirLabs dashboard usage is higher than Node-RED | The dashboard also includes earlier tests, other applications, or requests made before the local counter started | Trust the dashboard; keep the two-hour/six-hour defaults and do not repeatedly redeploy or manually click the AirLabs request Inject nodes |
 | AirLabs unavailable • cached schedules active | A refresh failed, but the previous minimized response is still within its 24-hour stale window | Live OpenSky tracking continues; check the provider later |
 | Route appears but no gate or time | The live aircraft matched, but it is not on the selected airport board or the plan omitted those fields | Route and status can still be valid; terminal and gate enrichment is selected-airport-only |
