@@ -117,8 +117,26 @@ test("AirLabs enrichment selects Miami from the radar center and stays disabled 
     assert.equal(rt.flow.values.openskyScheduleConfig.airportIata, "MIA");
     assert.equal(rt.flow.values.openskyScheduleConfig.selectionMode, "nearest-in-radius");
     assert.ok(rt.flow.values.openskyScheduleConfig.airportDistanceKm < 150);
-    assert.equal(rt.flow.values.openskyScheduleConfig.estimatedDailyScheduleRequests, 24);
-    assert.equal(rt.flow.values.openskyScheduleConfig.dailyRequestCap, 1000);
+    assert.equal(rt.flow.values.openskyScheduleConfig.refreshMinutes, 360);
+    assert.equal(rt.flow.values.openskyScheduleConfig.estimated30DayScheduleRequests, 240);
+    assert.equal(rt.flow.values.openskyScheduleConfig.monthlyRequestCap, 900);
+});
+
+test("AirLabs schedule protection settings can be changed with flow environment variables", () => {
+    const rt = runtime({
+        flow: store({
+            openskyRadarConfig: { centerLat: 25.7617, centerLon: -80.1918, radiusKm: 150 },
+            ourAirportsDirectory: airportDirectory
+        }),
+        env: {
+            AIRLABS_SCHEDULE_REFRESH_MINUTES: "720",
+            AIRLABS_MONTHLY_REQUEST_CAP: "800"
+        }
+    });
+    assert.equal(execute("airlabs-prepare-requests", rt), null);
+    assert.equal(rt.flow.values.openskyScheduleConfig.refreshMinutes, 720);
+    assert.equal(rt.flow.values.openskyScheduleConfig.estimated30DayScheduleRequests, 120);
+    assert.equal(rt.flow.values.openskyScheduleConfig.monthlyRequestCap, 800);
 });
 
 test("AirLabs request preparation follows Chicago and creates only two guarded requests", () => {
@@ -201,17 +219,39 @@ test("moving the radar clears schedules cached for the previous airport", () => 
     assert.equal(sharedFlow.values.airlabsLastRequestAt, 0);
 });
 
-test("AirLabs daily request guard stops calls before the configured cap is exceeded", () => {
-    const day = new Date().toISOString().slice(0, 10);
-    const sharedFlow = store({ airlabsRequestUsage: { day, count: 1000, byPurpose: { live: 976, schedules: 24 } } });
+test("AirLabs rolling 30-day request guard stops calls before the configured cap is exceeded", () => {
+    const now = Date.now();
+    const sharedFlow = store({
+        airlabsRequestUsage: {
+            events: [{ at: now, purpose: "live", units: 900 }],
+            count: 900,
+            byPurpose: { live: 900, schedules: 0 }
+        }
+    });
     const rt = runtime({
         flow: sharedFlow,
-        env: { AIRLABS_API_KEY: "test-only-key", AIRLABS_AIRPORT_IATA: "MIA", AIRLABS_DAILY_REQUEST_CAP: "1000" }
+        env: { AIRLABS_API_KEY: "test-only-key", AIRLABS_AIRPORT_IATA: "MIA", AIRLABS_MONTHLY_REQUEST_CAP: "900" }
     });
     const result = execute("airlabs-prepare-requests", rt);
     assert.equal(result, null);
-    assert.equal(sharedFlow.values.airlabsRequestUsage.count, 1000);
+    assert.equal(sharedFlow.values.airlabsRequestUsage.count, 900);
     assert.equal(sharedFlow.values.airlabsScheduleMeta.quotaGuardActive, true);
+    assert.equal(sharedFlow.values.airlabsScheduleMeta.monthlyRequestCap, 900);
+});
+
+test("AirLabs rolling guard forgets attempts older than 30 days", () => {
+    const sharedFlow = store({
+        openskyRadarConfig: { centerLat: 25.7617, centerLon: -80.1918, radiusKm: 150 },
+        airlabsRequestUsage: {
+            events: [{ at: Date.now() - 31 * 24 * 60 * 60 * 1000, purpose: "live", units: 900 }],
+            count: 900,
+            byPurpose: { live: 900, schedules: 0 }
+        }
+    });
+    const rt = runtime({ flow: sharedFlow, env: { AIRLABS_API_KEY: "test-only-key" } });
+    assert.ok(execute("airlabs-live-prepare", rt));
+    assert.equal(sharedFlow.values.airlabsRequestUsage.count, 1);
+    assert.equal(sharedFlow.values.airlabsRequestUsage.events.length, 1);
 });
 
 test("one AirLabs live request covers the radar box and is guarded independently of OpenSky", () => {
@@ -229,13 +269,15 @@ test("one AirLabs live request covers the radar box and is guarded independently
     }
     assert.equal(sharedFlow.values.airlabsRequestUsage.count, 1);
     assert.equal(sharedFlow.values.airlabsRequestUsage.byPurpose.live, 1);
-    assert.equal(sharedFlow.values.openskyAirLabsLiveConfig.estimatedDailyRequests, 288);
-    assert.equal(execute("airlabs-live-prepare", rt), null, "five-minute guard should prevent an immediate repeat");
+    assert.equal(sharedFlow.values.openskyAirLabsLiveConfig.refreshMinutes, 120);
+    assert.equal(sharedFlow.values.openskyAirLabsLiveConfig.estimated30DayRequests, 360);
+    assert.equal(sharedFlow.values.openskyAirLabsLiveConfig.monthlyRequestCap, 900);
+    assert.equal(execute("airlabs-live-prepare", rt), null, "two-hour guard should prevent an immediate repeat");
 });
 
 test("AirLabs live responses are indexed by aircraft hex and expose safe provider credits", () => {
-    const cfg = { refreshMinutes: 5, dailyRequestCap: 1000, estimatedDailyRequests: 288, bbox: "1,2,3,4" };
-    const sharedFlow = store({ airlabsRequestUsage: { day: "2026-08-30", count: 1, byPurpose: { live: 1, schedules: 0 } } });
+    const cfg = { refreshMinutes: 120, monthlyRequestCap: 900, estimated30DayRequests: 360, bbox: "1,2,3,4" };
+    const sharedFlow = store({ airlabsRequestUsage: { count: 1, byPurpose: { live: 1, schedules: 0 } } });
     const rt = runtime({
         flow: sharedFlow,
         msg: {
@@ -262,7 +304,7 @@ test("AirLabs live responses are indexed by aircraft hex and expose safe provide
 
 test("AirLabs responses are minimized, indexed, and stripped of request secrets", () => {
     const sharedFlow = store({
-        openskyScheduleConfig: { airportIata: "MIA", refreshMinutes: 120, maxRecords: 50, estimatedDailyScheduleRequests: 24 }
+        openskyScheduleConfig: { airportIata: "MIA", refreshMinutes: 360, maxRecords: 50, estimated30DayScheduleRequests: 240 }
     });
     const departure = runtime({
         flow: sharedFlow,
@@ -287,7 +329,7 @@ test("AirLabs responses are minimized, indexed, and stripped of request secrets"
     assert.equal(sharedFlow.values.airlabsScheduleCache.byFlight.AA123.arrivalGate, "42");
     assert.equal(sharedFlow.values.airlabsScheduleCache.byFlight.BA2421.codeshareAirlineIata, "BA");
     assert.equal(sharedFlow.values.airlabsScheduleMeta.records, 1);
-    assert.ok(sharedFlow.values.airlabsScheduleCache.staleUntil - sharedFlow.values.airlabsScheduleCache.fetchedAt <= 6 * 60 * 60 * 1000);
+    assert.ok(sharedFlow.values.airlabsScheduleCache.staleUntil - sharedFlow.values.airlabsScheduleCache.fetchedAt <= 24 * 60 * 60 * 1000);
     assert.equal(sharedFlow.values.airlabsScheduleCache.byFlight.AAL123.codeshareFlightIcao, undefined);
     assert.equal(sharedFlow.values.airlabsScheduleCache.byFlight.AAL123.providerUpdated, undefined);
     assert.doesNotMatch(JSON.stringify(sharedFlow.values.airlabsScheduleCache), /test-only-key/);
@@ -295,7 +337,7 @@ test("AirLabs responses are minimized, indexed, and stripped of request secrets"
 
 test("AirLabs direct-array responses are accepted", () => {
     const sharedFlow = store({
-        openskyScheduleConfig: { airportIata: "SFO", refreshMinutes: 120, maxRecords: 50, estimatedDailyScheduleRequests: 24 }
+        openskyScheduleConfig: { airportIata: "SFO", refreshMinutes: 360, maxRecords: 50, estimated30DayScheduleRequests: 240 }
     });
     const rt = runtime({
         flow: sharedFlow,
@@ -311,7 +353,7 @@ test("AirLabs direct-array responses are accepted", () => {
 });
 
 test("AirLabs provider pages larger than the configured limit are capped locally", () => {
-    const cfg = { airportIata: "MIA", refreshMinutes: 120, maxRecords: 50, estimatedDailyScheduleRequests: 24 };
+    const cfg = { airportIata: "MIA", refreshMinutes: 360, maxRecords: 50, estimated30DayScheduleRequests: 240 };
     const rows = Array.from({ length: 100 }, (_, index) => ({
         flight_iata: "AA" + String(index + 1),
         flight_icao: "AAL" + String(index + 1),
@@ -592,11 +634,11 @@ test("the periodic health summary is nonempty and contains no credentials", () =
         openskyRadarStatus: { aircraftCount: 12, airborne: 11, grounded: 1, updatedAt: "2026-08-30T12:00:00.000Z", authMode: "Authenticated", creditsRemaining: 3850 },
         faaOperatorDirectoryMeta: { count: 6500, updatedAt: "2026-08-30T01:00:00.000Z" },
         ourAirportsMeta: { count: 3000, updatedAt: "2026-08-30T02:00:00.000Z" },
-        openskyScheduleConfig: { airportIata: "SFO", airportName: "San Francisco International Airport", airportDistanceKm: 18, selectionMode: "nearest-in-radius", dailyRequestCap: 1000 },
-        openskyAirLabsLiveConfig: { refreshMinutes: 5, dailyRequestCap: 1000 },
+        openskyScheduleConfig: { airportIata: "SFO", airportName: "San Francisco International Airport", airportDistanceKm: 18, selectionMode: "nearest-in-radius", refreshMinutes: 360, estimated30DayScheduleRequests: 240, monthlyRequestCap: 900 },
+        openskyAirLabsLiveConfig: { refreshMinutes: 120, estimated30DayRequests: 360, monthlyRequestCap: 900 },
         airlabsLiveMeta: { enabled: true, ready: true, records: 37 },
         airlabsScheduleMeta: { enabled: true, ready: true, records: 42 },
-        airlabsRequestUsage: { day: "2026-08-30", count: 26, byPurpose: { live: 2, schedules: 24 }, providerCreditsRemaining: 3974 }
+        airlabsRequestUsage: { windowDays: 30, windowStartedAt: "2026-08-30T00:00:00.000Z", count: 26, byPurpose: { live: 2, schedules: 24 }, providerCreditsRemaining: 3974 }
     });
     const rt = runtime({ flow: sharedFlow, env: { AIRLABS_API_KEY: "must-not-appear" } });
     const result = execute("system-health-summary", rt);
@@ -608,6 +650,10 @@ test("the periodic health summary is nonempty and contains no credentials", () =
     assert.equal(result.payload.airports.selectedIata, "SFO");
     assert.equal(result.payload.liveRoutes.records, 37);
     assert.equal(result.payload.airlabsUsage.requestsUsed, 26);
+    assert.equal(result.payload.airlabsUsage.rollingWindowDays, 30);
+    assert.equal(result.payload.airlabsUsage.monthlyRequestCap, 900);
+    assert.equal(result.payload.airlabsUsage.requestsRemainingInLocalBudget, 874);
+    assert.equal(result.payload.airlabsUsage.estimated30DayRequests, 600);
     assert.equal(result.payload.airlabsUsage.providerCreditsRemaining, 3974);
     assert.doesNotMatch(JSON.stringify(result), /must-not-appear|api_key|secret/i);
 });
@@ -643,14 +689,14 @@ test("the dedicated AirLabs status is useful and credential-free", () => {
             openskyScheduleConfig: {
                 airportIata: "MIA", airportName: "Miami International Airport",
                 airportDistanceKm: 10.5, selectionMode: "nearest-in-radius",
-                refreshMinutes: 120, estimatedDailyScheduleRequests: 24, dailyRequestCap: 1000
+                refreshMinutes: 360, estimated30DayScheduleRequests: 240, monthlyRequestCap: 900
             },
-            openskyAirLabsLiveConfig: { refreshMinutes: 5, estimatedDailyRequests: 288, dailyRequestCap: 1000 },
+            openskyAirLabsLiveConfig: { refreshMinutes: 120, estimated30DayRequests: 360, monthlyRequestCap: 900 },
             airlabsLiveMeta: { enabled: true, ready: true, records: 34, hexMatchKeys: 33, flightMatchKeys: 31 },
             airlabsLiveCache: { fetchedAt: now - 30_000 },
             airlabsScheduleMeta: { enabled: true, ready: true, records: 50, matchKeys: 72 },
             airlabsScheduleCache: { fetchedAt: now - 60_000 },
-            airlabsRequestUsage: { day: "2026-08-30", count: 3, byPurpose: { live: 1, schedules: 2 }, providerCreditsRemaining: 3997 }
+            airlabsRequestUsage: { windowDays: 30, windowStartedAt: "2026-08-30T00:00:00.000Z", count: 3, byPurpose: { live: 1, schedules: 2 }, providerCreditsRemaining: 3997 }
         })
     });
     const result = execute("airlabs-health-summary", rt);
@@ -659,6 +705,9 @@ test("the dedicated AirLabs status is useful and credential-free", () => {
     assert.equal(result.payload.schedules.selectedAirport, "MIA");
     assert.equal(result.payload.schedules.records, 50);
     assert.equal(result.payload.usage.requestsUsed, 3);
+    assert.equal(result.payload.usage.monthlyRequestCap, 900);
+    assert.equal(result.payload.usage.requestsRemainingInLocalBudget, 897);
+    assert.equal(result.payload.usage.estimated30DayRequests, 600);
     assert.equal(result.payload.usage.providerCreditsRemaining, 3997);
     assert.doesNotMatch(JSON.stringify(result), /must-not-appear|api_key|request url/i);
 });
